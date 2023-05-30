@@ -331,6 +331,7 @@ CONFIG_TINYUSB_DEBUG_LEVEL=0
 # end of Arduino TinyUSB
 
 #
+<<<<<<< HEAD
 # ESP Speech Recognition
 #
 CONFIG_MODEL_IN_SPIFFS=y
@@ -769,6 +770,8 @@ CONFIG_EN_SPEECH_COMMAND_ID199=""
 # end of ESP Speech Recognition
 
 #
+=======
+>>>>>>> a55f2bc3584634460773b30a1df86a5a3e90a250
 # Compiler options
 #
 # CONFIG_COMPILER_OPTIMIZATION_DEFAULT is not set
