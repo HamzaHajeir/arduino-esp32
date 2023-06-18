@@ -36,10 +36,12 @@ extern "C" {
 #include <esp_err.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
+#include <esp_mac.h>
 #include "lwip/ip_addr.h"
 #include "lwip/opt.h"
 #include "lwip/err.h"
 #include "lwip/dns.h"
+#include "dhcpserver/dhcpserver.h"
 #include "dhcpserver/dhcpserver_options.h"
 
 } //extern "C"
@@ -832,6 +834,7 @@ const char * WiFiGenericClass::disconnectReasonName(wifi_err_reason_t reason) {
         case WIFI_REASON_CONNECTION_FAIL: return "CONNECTION_FAIL";
         case WIFI_REASON_AP_TSF_RESET: return "AP_TSF_RESET";
         case WIFI_REASON_ROAMING: return "ROAMING";
+        case WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG: return "ASSOC_COMEBACK_TIME_TOO_LONG";
         default: return "";
     }
 }

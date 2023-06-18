@@ -1,3 +1,4 @@
+tools/esp32-arduino-libs
 tools/xtensa-esp32-elf
 tools/xtensa-esp32s2-elf
 tools/xtensa-esp32s3-elf
@@ -42,3 +43,4 @@ _build/
 debug.cfg
 debug.svd
 debug_custom.json
+libraries/Insights/examples/*/*.ino.zip

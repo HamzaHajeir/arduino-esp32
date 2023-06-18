@@ -22,13 +22,16 @@
 #include "freertos/ringbuf.h"
 #include "esp_intr_alloc.h"
 #include "soc/periph_defs.h"
+#pragma GCC diagnostic ignored "-Wvolatile"
 #include "hal/usb_serial_jtag_ll.h"
+#pragma GCC diagnostic warning "-Wvolatile"
+#include "rom/ets_sys.h"
 
 ESP_EVENT_DEFINE_BASE(ARDUINO_HW_CDC_EVENTS);
 
 static RingbufHandle_t tx_ring_buf = NULL;
 static xQueueHandle rx_queue = NULL;
-static uint8_t rx_data_buf[64];
+static uint8_t rx_data_buf[64] = {0};
 static intr_handle_t intr_handle = NULL;
 static volatile bool initial_empty = false;
 static xSemaphoreHandle tx_lock = NULL;
@@ -195,6 +198,7 @@ void HWCDC::end()
     intr_handle = NULL;
     if(tx_lock != NULL) {
         vSemaphoreDelete(tx_lock);
+        tx_lock = NULL;
     }
     setRxBufferSize(0);
     setTxBufferSize(0);
