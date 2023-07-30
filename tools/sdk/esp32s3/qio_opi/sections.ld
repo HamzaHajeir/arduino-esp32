@@ -80,7 +80,7 @@ SECTIONS
     *(.rtc.data .rtc.data.*)
     *(.rtc.rodata .rtc.rodata.*)
 
-    *rtc_wake_stub*.*(.data .rodata .data.* .rodata.*)
+    *rtc_wake_stub*.*(.data .rodata .data.* .rodata.* .bss .bss.*)
     _rtc_data_end = ABSOLUTE(.);
   } > rtc_data_location
 
