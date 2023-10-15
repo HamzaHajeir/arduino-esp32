@@ -1,5 +1,5 @@
 esp-idf: 4cafc60a00
-arduino: main 52ac8d37
+arduino: main a33b6fe7
 esp32-camera: master efe711d
 esp_littlefs: v1.10.0 032f9eb
 tinyusb: master 118823c25
