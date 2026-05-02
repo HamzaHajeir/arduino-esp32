@@ -426,6 +426,7 @@ static bool _uartTrySetIomuxPin(uart_port_t uart_num, int io_num, uint32_t idx) 
     // HP UART peripheral just tries to attach IOMUX and return success or failure
     // In theory, if default_gpio is -1, iomux_func should also be -1, but let's be safe and test both.
     if (upin->default_gpio == -1 || upin->default_gpio != io_num) {
+      log_v("Pin %d is not valid for UART IO Mux", io_num);
       return false;
     }
 
@@ -436,8 +437,10 @@ static bool _uartTrySetIomuxPin(uart_port_t uart_num, int io_num, uint32_t idx) 
     }
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
     if (upin->input) {
+      log_v("IO Pin %d is configured for IO MUX INPUT Mode", io_num);
       return ESP_OK == gpio_iomux_input(io_num, upin->iomux_func, upin->signal);
     } else {
+      log_v("IO Pin %d is configured for IO MUX OUTPUT Mode", io_num);
       return ESP_OK == gpio_iomux_output(io_num, upin->iomux_func);
     }
 #else
@@ -475,6 +478,7 @@ static bool _uartInternalSetPin(uart_port_t uart_num, int tx_io_num, int rx_io_n
       if (uart_num < SOC_UART_HP_NUM) {
         retCode &= ESP_OK == gpio_func_sel(tx_io_num, PIN_FUNC_GPIO);
         esp_rom_gpio_connect_out_signal(tx_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_TX_PIN_IDX), 0, 0);
+        log_v("GPIO %d is configured within GPIO Matrix as UART%d TX Pin", tx_io_num, uart_num);
       } else {
         // LP UART couldn't attach pin, therefore it has failed
         retCode = false;
@@ -491,13 +495,17 @@ static bool _uartInternalSetPin(uart_port_t uart_num, int tx_io_num, int rx_io_n
 #endif
     if (!_uartTrySetIomuxPin(uart_num, rx_io_num, SOC_UART_RX_PIN_IDX)) {
       if (uart_num < SOC_UART_HP_NUM) {
+        // Connect signal first, then configure GPIO
+        esp_rom_gpio_connect_in_signal(rx_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_RX_PIN_IDX), 0);
+        retCode &= ESP_OK == gpio_func_sel(rx_io_num, PIN_FUNC_GPIO);
+        // Enable pull-up for RX pin
+        gpio_pullup_en(rx_io_num);
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
         retCode &= ESP_OK == gpio_input_enable(rx_io_num);
 #else
-        retCode &= ESP_OK == gpio_func_sel(rx_io_num, PIN_FUNC_GPIO);
         gpio_ll_input_enable(&GPIO, rx_io_num);
 #endif
-        esp_rom_gpio_connect_in_signal(rx_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_RX_PIN_IDX), 0);
+        log_v("GPIO %d is configured within GPIO Matrix as UART%d RX Pin", rx_io_num, uart_num);
       } else {
         // LP UART couldn't attach pin, therefore it has failed
         retCode = false;
@@ -509,6 +517,7 @@ static bool _uartInternalSetPin(uart_port_t uart_num, int tx_io_num, int rx_io_n
     if (uart_num < SOC_UART_HP_NUM) {
       retCode &= ESP_OK == gpio_func_sel(rts_io_num, PIN_FUNC_GPIO);
       esp_rom_gpio_connect_out_signal(rts_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_RTS_PIN_IDX), 0, 0);
+      log_v("GPIO %d is configured within GPIO Matrix as UART%d RTS Pin", rts_io_num, uart_num);
     } else {
       // LP UART couldn't attach pin, therefore it has failed
       retCode = false;
@@ -526,6 +535,7 @@ static bool _uartInternalSetPin(uart_port_t uart_num, int tx_io_num, int rx_io_n
       retCode &= ESP_OK == gpio_set_direction(cts_io_num, GPIO_MODE_INPUT);
 #endif
       esp_rom_gpio_connect_in_signal(cts_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_CTS_PIN_IDX), 0);
+      log_v("GPIO %d is configured within GPIO Matrix as UART%d CTS Pin", cts_io_num, uart_num);
     } else {
       // LP UART couldn't attach pin, therefore it has failed
       retCode = false;
@@ -787,11 +797,22 @@ bool uartSetPins(uint8_t uart_num, int8_t rxPin, int8_t txPin, int8_t ctsPin, in
   // get UART information
   uart_t *uart = &_uart_bus_array[uart_num];
 
-  bool retCode = true;
-  UART_MUTEX_LOCK();
-
   //log_v("setting UART%u pins: prev->new RX(%d->%d) TX(%d->%d) CTS(%d->%d) RTS(%d->%d)", uart_num,
   //        uart->_rxPin, rxPin, uart->_txPin, txPin, uart->_ctsPin, ctsPin, uart->_rtsPin, rtsPin); vTaskDelay(10);
+
+  // If driver is not yet installed, just store the pin configuration
+  // The pins will be properly attached when the driver is installed in uartBegin()
+  if (!uartIsDriverInstalled(uart)) {
+    log_v("UART%u: Driver not yet installed, storing pins for later attachment (RX:%d, TX:%d)", uart_num, rxPin, txPin);
+    if (rxPin >= 0) uart->_rxPin = rxPin;
+    if (txPin >= 0) uart->_txPin = txPin;
+    if (ctsPin >= 0) uart->_ctsPin = ctsPin;
+    if (rtsPin >= 0) uart->_rtsPin = rtsPin;
+    return true;  // Successfully stored pin configuration
+  }
+
+  bool retCode = true;
+  UART_MUTEX_LOCK();
 
   // mute bus detaching callbacks to avoid terminating the UART driver when both RX and TX pins are detached
   peripheral_bus_deinit_cb_t rxDeinit = perimanGetBusDeinit(ESP32_BUS_TYPE_UART_RX);
@@ -921,8 +942,10 @@ bool uartSetPins(uint8_t uart_num, int8_t rxPin, int8_t txPin, int8_t ctsPin, in
 
   if (!retCode) {
     log_e("UART%u set pins failed.", uart_num);
+    return retCode;
   }
 
+  // do not end serial object if any fail in setting pins occurs
   // Execute terminations AFTER releasing the mutex to avoid deadlock
   for (int i = 0; i < terminateCount; i++) {
     if (uartsToTerminate[i] >= 0) {
