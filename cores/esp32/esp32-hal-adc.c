@@ -547,13 +547,12 @@ bool analogContinuous(const uint8_t pins[], size_t pins_count, uint32_t conversi
   }
 #endif
 
-#if CONFIG_IDF_TARGET_ESP32P4
-  // Align conversion frame size to the L2 cache line size (128 B), which is the binding
-  // constraint for GDMA on ESP32-P4.  CONFIG_CACHE_L1_CACHE_LINE_SIZE is only 64 B and
-  // is not sufficient here.
-  uint32_t alignment_remainder = adc_handle[adc_unit].conversion_frame_size % 128;
+#if ESP_ARDUINO_DMA_BUF_ALIGN > 4
+  // Align the conversion frame size to the DMA alignment boundary so that
+  // cache-coherency is maintained (e.g. L2 cache on ESP32-P4 = CONFIG_CACHE_L2_CACHE_LINE_SIZE).
+  uint32_t alignment_remainder = adc_handle[adc_unit].conversion_frame_size % ESP_ARDUINO_DMA_BUF_ALIGN;
   if (alignment_remainder != 0) {
-    adc_handle[adc_unit].conversion_frame_size += (128 - alignment_remainder);
+    adc_handle[adc_unit].conversion_frame_size += (ESP_ARDUINO_DMA_BUF_ALIGN - alignment_remainder);
   }
 #endif
 
@@ -637,9 +636,8 @@ bool analogContinuousRead(adc_continuous_result_t **buffer, uint32_t timeout_ms)
 
     // Allocate DMA buffer with cache line alignment (required for ESP32-P4 and other targets with cache)
     size_t buffer_size = adc_handle[ADC_UNIT_1].conversion_frame_size;
-#if CONFIG_IDF_TARGET_ESP32P4
-    // ESP32-P4 GDMA routes through the L2 cache (128-byte cache lines); align to 128 B.
-    uint8_t *adc_read = (uint8_t *)heap_caps_aligned_alloc(128, buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+#if ESP_ARDUINO_DMA_BUF_ALIGN > 4
+    uint8_t *adc_read = (uint8_t *)heap_caps_aligned_alloc(ESP_ARDUINO_DMA_BUF_ALIGN, buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 #else
     uint8_t *adc_read = (uint8_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 #endif
