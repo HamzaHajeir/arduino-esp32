@@ -59,13 +59,13 @@
 #define ESP_ARDUINO_DMA_BUF_ALIGN 4
 #endif
 
-/** Round a byte count up to the next ESP_ARDUINO_DMA_BUF_ALIGN boundary.
- *  Requires ESP_ARDUINO_DMA_BUF_ALIGN to be a power of two, which is guaranteed
- *  by the IDF Kconfig cache-line-size values (4, 32, 64, 128 …). */
-#define ESP_ARDUINO_DMA_ALIGN_UP(n) (((n) + (ESP_ARDUINO_DMA_BUF_ALIGN) - 1) & ~((ESP_ARDUINO_DMA_BUF_ALIGN) - 1))
+/** True when a pointer address is aligned to the DMA requirement. */
+#define ESP_ARDUINO_DMA_IS_PTR_ALIGNED(ptr) (((uintptr_t)(ptr) & ((ESP_ARDUINO_DMA_BUF_ALIGN) - 1)) == 0)
 
-/* Compile-time check: the alignment value must be a power of two for the
- * bitwise-AND round-up in ESP_ARDUINO_DMA_ALIGN_UP to be correct. */
+/** True when a byte count is a multiple of the DMA alignment requirement. */
+#define ESP_ARDUINO_DMA_IS_SIZE_ALIGNED(sz) (((sz) & ((ESP_ARDUINO_DMA_BUF_ALIGN) - 1)) == 0)
+
+/* Compile-time check: the alignment value must be a power of two. */
 _Static_assert(((ESP_ARDUINO_DMA_BUF_ALIGN) & ((ESP_ARDUINO_DMA_BUF_ALIGN) - 1)) == 0,
                "ESP_ARDUINO_DMA_BUF_ALIGN must be a power of two");
 

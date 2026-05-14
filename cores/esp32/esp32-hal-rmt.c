@@ -69,26 +69,6 @@ struct rmt_obj_s {
 #if !CONFIG_DISABLE_HAL_LOCKS
   SemaphoreHandle_t g_rmt_objlocks;  // Channel Semaphore Lock
 #endif                               /* CONFIG_DISABLE_HAL_LOCKS */
-
-#if ESP_ARDUINO_DMA_BUF_ALIGN > 4
-  // On targets where GDMA routes through a cache (e.g. ESP32-P4 L2 cache), rmt_receive()
-  // DMA-writes directly into the caller's buffer.  Keep an internally managed,
-  // ESP_ARDUINO_DMA_BUF_ALIGN-byte-aligned bounce buffer here so the caller's buffer
-  // (which may be a stack array or otherwise unaligned) is always safe.  The ISR
-  // callback copies the received data into the user buffer before signalling completion.
-  //
-  // NOTE: concurrent/overlapping receive operations (calling rmtReadAsync() before the
-  // previous receive is complete) are not supported; the second call will overwrite
-  // user_rx_buf and corrupt the in-flight transfer.
-  //
-  // Memory bound: the bounce buffer is sized to the user's request and persisted for
-  // reuse.  Its maximum size is naturally bounded by the RMT hardware: at most
-  // mem_size * SOC_RMT_MEM_WORDS_PER_CHANNEL symbols, which for the maximum 8 blocks
-  // is ≤ 512 symbols × 4 B = 2 KB.
-  rmt_data_t *bounce_rx_buf;    // aligned DMA receive bounce buffer
-  size_t bounce_rx_buf_size;    // allocated size of bounce_rx_buf in bytes
-  rmt_data_t *user_rx_buf;      // user destination pointer (set before each receive)
-#endif
 };
 
 typedef struct rmt_obj_s *rmt_bus_handle_t;
@@ -108,12 +88,6 @@ static bool _rmt_rx_done_callback(rmt_channel_handle_t channel, const rmt_rx_don
   rmt_bus_handle_t bus = (rmt_bus_handle_t)args;
   // sets the returning number of RMT symbols (32 bits) effectively read
   *bus->num_symbols_read = data->num_symbols;
-#if ESP_ARDUINO_DMA_BUF_ALIGN > 4
-  // Copy from the aligned bounce buffer into the user-supplied buffer before signalling done.
-  if (bus->bounce_rx_buf != NULL && bus->user_rx_buf != NULL) {
-    memcpy(bus->user_rx_buf, bus->bounce_rx_buf, data->num_symbols * sizeof(rmt_data_t));
-  }
-#endif
   // set RX event group and signal the received RMT symbols of that channel
   xEventGroupSetBitsFromISR(bus->rmt_events, RMT_FLAG_RX_DONE, &high_task_wakeup);
   // A "need to yield" is returned in order to execute portYIELD_FROM_ISR() in the main IDF RX ISR
@@ -196,12 +170,6 @@ static bool _rmtDetachBus(void *busptr) {
   // deallocate channel semaphore
   if (bus->g_rmt_objlocks != NULL) {
     vSemaphoreDelete(bus->g_rmt_objlocks);
-  }
-#endif
-#if ESP_ARDUINO_DMA_BUF_ALIGN > 4
-  // free the DMA receive bounce buffer
-  if (bus->bounce_rx_buf != NULL) {
-    heap_caps_free(bus->bounce_rx_buf);
   }
 #endif
   // free the allocated bus data structure
@@ -446,29 +414,34 @@ static bool _rmtRead(int pin, rmt_data_t *data, size_t *num_rmt_symbols, bool wa
 
 
 #if ESP_ARDUINO_DMA_BUF_ALIGN > 4
-  // On targets where GDMA routes through a cache, rmt_receive() DMA-writes directly into
-  // the caller's buffer.  Use an internally managed, cache-line-aligned bounce buffer so
-  // the caller's buffer (stack array etc.) can be arbitrary.  The size is rounded up to
-  // the next ESP_ARDUINO_DMA_BUF_ALIGN boundary as required by the DMA controller.
+  // On targets where GDMA routes through a cache (e.g. ESP32-P4 with a 128-byte L2
+  // cache), rmt_receive() DMA-writes directly into the caller's buffer.  Both the
+  // buffer address and its byte length must be aligned to ESP_ARDUINO_DMA_BUF_ALIGN.
+  // Callers must declare their buffer with the correct alignment, for example:
+  //   static rmt_data_t WORD_ALIGNED_ATTR buf[N]; // generic 4-byte alignment
+  //   static rmt_data_t __attribute__((aligned(ESP_ARDUINO_DMA_BUF_ALIGN))) buf[N];
   size_t req_size = *num_rmt_symbols * sizeof(rmt_data_t);
-  size_t aligned_size = ESP_ARDUINO_DMA_ALIGN_UP(req_size);
-  if (bus->bounce_rx_buf == NULL || bus->bounce_rx_buf_size < aligned_size) {
-    heap_caps_free(bus->bounce_rx_buf);
-    bus->bounce_rx_buf = (rmt_data_t *)heap_caps_aligned_alloc(ESP_ARDUINO_DMA_BUF_ALIGN, aligned_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (bus->bounce_rx_buf == NULL) {
-      bus->bounce_rx_buf_size = 0;
-      log_e("GPIO %d - RMT RX bounce buffer allocation failed.", pin);
-      retCode = false;
-    } else {
-      bus->bounce_rx_buf_size = aligned_size;
-    }
+  if (!ESP_ARDUINO_DMA_IS_PTR_ALIGNED(data)) {
+    log_e(
+      "GPIO %d - RMT RX buffer address %p is not aligned to %u bytes (ESP_ARDUINO_DMA_BUF_ALIGN). "
+      "Declare the buffer with __attribute__((aligned(%u))).",
+      pin, (void *)data, ESP_ARDUINO_DMA_BUF_ALIGN, ESP_ARDUINO_DMA_BUF_ALIGN
+    );
+    RMT_MUTEX_UNLOCK(bus);
+    return false;
   }
-  if (retCode) {
-    bus->user_rx_buf = data;
-    if (rmt_receive(bus->rmt_channel_h, bus->bounce_rx_buf, bus->bounce_rx_buf_size, &receive_config) != ESP_OK) {
-      log_e("GPIO %d - rmt_receive failed.", pin);
-      retCode = false;
-    }
+  if (!ESP_ARDUINO_DMA_IS_SIZE_ALIGNED(req_size)) {
+    log_e(
+      "GPIO %d - RMT RX buffer size %u is not a multiple of %u bytes (ESP_ARDUINO_DMA_BUF_ALIGN). "
+      "Round num_rmt_symbols up so that num_rmt_symbols * %u is a multiple of %u.",
+      pin, (unsigned)req_size, ESP_ARDUINO_DMA_BUF_ALIGN, (unsigned)sizeof(rmt_data_t), ESP_ARDUINO_DMA_BUF_ALIGN
+    );
+    RMT_MUTEX_UNLOCK(bus);
+    return false;
+  }
+  if (rmt_receive(bus->rmt_channel_h, data, req_size, &receive_config) != ESP_OK) {
+    log_e("GPIO %d - rmt_receive failed.", pin);
+    retCode = false;
   }
 #else
   if (rmt_receive(bus->rmt_channel_h, data, *num_rmt_symbols * sizeof(rmt_data_t), &receive_config) != ESP_OK) {
