@@ -69,6 +69,16 @@ struct rmt_obj_s {
 #if !CONFIG_DISABLE_HAL_LOCKS
   SemaphoreHandle_t g_rmt_objlocks;  // Channel Semaphore Lock
 #endif                               /* CONFIG_DISABLE_HAL_LOCKS */
+
+#if CONFIG_IDF_TARGET_ESP32P4
+  // On ESP32-P4, rmt_receive() DMA-writes directly into the caller's buffer through the
+  // L2 cache (128-byte lines).  Keep an internally managed, 128-byte-aligned bounce
+  // buffer here so the caller's buffer can be arbitrary.  The ISR callback copies the
+  // received data into the user buffer before signalling completion.
+  rmt_data_t *bounce_rx_buf;    // 128-byte aligned DMA receive bounce buffer
+  size_t bounce_rx_buf_size;    // allocated size of bounce_rx_buf in bytes
+  rmt_data_t *user_rx_buf;      // user destination pointer (set before each receive)
+#endif
 };
 
 typedef struct rmt_obj_s *rmt_bus_handle_t;
@@ -88,6 +98,12 @@ static bool _rmt_rx_done_callback(rmt_channel_handle_t channel, const rmt_rx_don
   rmt_bus_handle_t bus = (rmt_bus_handle_t)args;
   // sets the returning number of RMT symbols (32 bits) effectively read
   *bus->num_symbols_read = data->num_symbols;
+#if CONFIG_IDF_TARGET_ESP32P4
+  // Copy from the aligned bounce buffer into the user-supplied buffer before signalling done.
+  if (bus->bounce_rx_buf != NULL && bus->user_rx_buf != NULL) {
+    memcpy(bus->user_rx_buf, bus->bounce_rx_buf, data->num_symbols * sizeof(rmt_data_t));
+  }
+#endif
   // set RX event group and signal the received RMT symbols of that channel
   xEventGroupSetBitsFromISR(bus->rmt_events, RMT_FLAG_RX_DONE, &high_task_wakeup);
   // A "need to yield" is returned in order to execute portYIELD_FROM_ISR() in the main IDF RX ISR
@@ -170,6 +186,12 @@ static bool _rmtDetachBus(void *busptr) {
   // deallocate channel semaphore
   if (bus->g_rmt_objlocks != NULL) {
     vSemaphoreDelete(bus->g_rmt_objlocks);
+  }
+#endif
+#if CONFIG_IDF_TARGET_ESP32P4
+  // free the DMA receive bounce buffer
+  if (bus->bounce_rx_buf != NULL) {
+    heap_caps_free(bus->bounce_rx_buf);
   }
 #endif
   // free the allocated bus data structure
@@ -412,9 +434,41 @@ static bool _rmtRead(int pin, rmt_data_t *data, size_t *num_rmt_symbols, bool wa
     rmt_enable(bus->rmt_channel_h);
   }
 
-  rmt_receive(bus->rmt_channel_h, data, *num_rmt_symbols * sizeof(rmt_data_t), &receive_config);
+
+#if CONFIG_IDF_TARGET_ESP32P4
+  // ESP32-P4 GDMA routes RMT receive DMA through the L2 cache (128-byte cache lines).
+  // Use an internally managed, 128-byte-aligned bounce buffer so the caller's buffer
+  // (which may be a stack array or otherwise unaligned) is always safe.
+  // The bounce buffer is kept in the bus struct and reused across calls; it is only
+  // reallocated when the requested size grows.
+  size_t req_size = *num_rmt_symbols * sizeof(rmt_data_t);
+  size_t aligned_size = (req_size + 127) & ~127;
+  if (bus->bounce_rx_buf == NULL || bus->bounce_rx_buf_size < aligned_size) {
+    heap_caps_free(bus->bounce_rx_buf);
+    bus->bounce_rx_buf = (rmt_data_t *)heap_caps_aligned_alloc(128, aligned_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (bus->bounce_rx_buf == NULL) {
+      bus->bounce_rx_buf_size = 0;
+      log_e("GPIO %d - RMT RX bounce buffer allocation failed.", pin);
+      retCode = false;
+    } else {
+      bus->bounce_rx_buf_size = aligned_size;
+    }
+  }
+  if (retCode) {
+    bus->user_rx_buf = data;
+    if (rmt_receive(bus->rmt_channel_h, bus->bounce_rx_buf, bus->bounce_rx_buf_size, &receive_config) != ESP_OK) {
+      log_e("GPIO %d - rmt_receive failed.", pin);
+      retCode = false;
+    }
+  }
+#else
+  if (rmt_receive(bus->rmt_channel_h, data, *num_rmt_symbols * sizeof(rmt_data_t), &receive_config) != ESP_OK) {
+    log_e("GPIO %d - rmt_receive failed.", pin);
+    retCode = false;
+  }
+#endif
   // wait for data if requested
-  if (waitForData) {
+  if (retCode && waitForData) {
     retCode = (xEventGroupWaitBits(bus->rmt_events, RMT_FLAG_RX_DONE, pdFALSE /* do not clear on exit */, pdFALSE /* wait for all bits */, timeout_ms)
                & RMT_FLAG_RX_DONE)
               != 0;
