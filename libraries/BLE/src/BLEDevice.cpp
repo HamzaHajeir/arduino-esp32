@@ -1,23 +1,4 @@
 /*
- * Copyright 2017-2026 Espressif Systems (Shanghai) PTE LTD
- * Copyright 2020-2025 Ryan Powell <ryan@nable-embedded.io> and
- * esp-nimble-cpp, NimBLE-Arduino contributors.
- * Copyright 2017 Neil Kolban
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/*
  * BLEDevice.cpp
  *
  *  Created on: Mar 16, 2017
@@ -61,7 +42,6 @@
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include "esp32-hal-bt.h"
-#include "esp32-hal-alloc-ble-mem.h"
 #endif
 
 #include "esp32-hal-log.h"
@@ -119,7 +99,6 @@ BLEAdvertising *BLEDevice::m_bleAdvertising = nullptr;
 uint16_t BLEDevice::m_appId = 0;
 std::map<uint16_t, conn_status_t> BLEDevice::m_connectedClientsMap;
 gap_event_handler BLEDevice::m_customGapHandler = nullptr;
-String BLEDevice::m_deviceName;
 
 /***************************************************************************
  *                           Bluedroid properties                          *
@@ -157,14 +136,9 @@ BLEClient *BLEDevice::createClient() {
   abort();
 #endif  // CONFIG_GATTC_ENABLE
 
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return nullptr;
-  }
-
 #ifdef CONFIG_NIMBLE_ENABLED
   if (m_connectedClientsMap.size() >= CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
-    log_e("Unable to create client. Max connections reached. Cur=%lu Max=%u", (unsigned long)m_connectedClientsMap.size(), CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
+    log_e("Unable to create client. Max connections reached. Cur=%d Max=%d", m_connectedClientsMap.size(), CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
     m_pClient = nullptr;
   } else
 #endif
@@ -186,14 +160,9 @@ BLEServer *BLEDevice::createServer() {
   abort();
 #endif  // CONFIG_GATTS_ENABLE
 
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return nullptr;
-  }
-
   if (m_pServer == nullptr) {
     m_pServer = new BLEServer();
-    m_pServer->createApp(getNextAppId());
+    m_pServer->createApp(m_appId++);
 #if defined(CONFIG_NIMBLE_ENABLED)
     ble_gatts_reset();
     ble_svc_gap_init();
@@ -209,10 +178,6 @@ BLEServer *BLEDevice::createServer() {
  * @return The BLE device address.
  */
 BLEAddress BLEDevice::getAddress() {
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return BLEAddress();
-  }
 #if defined(CONFIG_BLUEDROID_ENABLED)
   const uint8_t *bdAddr = esp_bt_dev_get_address();
   esp_bd_addr_t addr;
@@ -237,15 +202,11 @@ BLEAddress BLEDevice::getAddress() {
  */
 BLEScan *BLEDevice::getScan() {
   //log_v(">> getScan");
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return nullptr;
-  }
   if (m_pScan == nullptr) {
     m_pScan = new BLEScan();
     //log_d(" - creating a new scan object");
   }
-  //log_v("<< getScan: Returning object at %p", m_pScan);
+  //log_v("<< getScan: Returning object at 0x%x", (uint32_t)m_pScan);
   return m_pScan;
 }  // getScan
 
@@ -269,10 +230,6 @@ String BLEDevice::getValue(BLEAddress bdAddress, BLEUUID serviceUUID, BLEUUID ch
     characteristicUUID.toString().c_str()
   );
   BLEClient *pClient = createClient();
-  if (pClient == nullptr) {
-    log_e("Failed to create BLE client");
-    return String();
-  }
   pClient->connect(bdAddress);
   String ret = pClient->getValue(serviceUUID, characteristicUUID);
   pClient->disconnect();
@@ -283,171 +240,163 @@ String BLEDevice::getValue(BLEAddress bdAddress, BLEUUID serviceUUID, BLEUUID ch
 /**
  * @brief Initialize the %BLE environment.
  * @param deviceName The device name of the device.
- * @return true if initialization was successful, false otherwise.
  */
-bool BLEDevice::init(String deviceName) {
-  if (initialized) {
-    return true;  // Already initialized
-  }
+void BLEDevice::init(String deviceName) {
+  if (!initialized) {
+    log_i("Initializing BLE stack: %s", getBLEStackString().c_str());
 
-  log_i("Initializing BLE stack: %s", getBLEStackString().c_str());
-
-  esp_err_t errRc = ESP_OK;
-
-#if defined(CONFIG_BT_CONTROLLER_ENABLED)
-  if (btMemReleased(BT_MODE_BLE)) {
-    log_e("BLE memory has been released. Cannot initialize BLE.");
-    return false;
-  }
-#endif
-
+    esp_err_t errRc = ESP_OK;
 #if defined(CONFIG_BLUEDROID_ENABLED)
 #if defined(ARDUINO_ARCH_ESP32)
-  if (!btStart()) {
-    errRc = ESP_FAIL;
-    return false;
-  }
-#else
-  btStarted();
-  errRc = nvs_flash_init();
-  if (errRc == ESP_ERR_NVS_NO_FREE_PAGES || errRc == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    errRc = nvs_flash_erase();
-    if (errRc == ESP_OK) {
-      errRc = nvs_flash_init();
+    if (!btStart()) {
+      errRc = ESP_FAIL;
+      return;
     }
-  }
+#else
+    btStarted();
+    errRc = nvs_flash_init();
+    if (errRc == ESP_ERR_NVS_NO_FREE_PAGES || errRc == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      errRc = nvs_flash_erase();
+      if (errRc == ESP_OK) {
+        errRc = nvs_flash_init();
+      }
+    }
 
-  if (errRc != ESP_OK) {
-    log_e("nvs_flash_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
-
-  esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  errRc = esp_bt_controller_init(&bt_cfg);
-  if (errRc != ESP_OK) {
-    log_e("esp_bt_controller_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    if (errRc != ESP_OK) {
+      log_e("nvs_flash_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 
 #ifndef CONFIG_BT_CLASSIC_ENABLED
-  errRc = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-  if (errRc != ESP_OK) {
-    log_e("esp_bt_controller_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+#endif
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    errRc = esp_bt_controller_init(&bt_cfg);
+    if (errRc != ESP_OK) {
+      log_e("esp_bt_controller_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
+
+#ifndef CONFIG_BT_CLASSIC_ENABLED
+    errRc = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    if (errRc != ESP_OK) {
+      log_e("esp_bt_controller_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 #else
-  errRc = esp_bt_controller_enable(ESP_BT_MODE_BTDM);
-  if (errRc != ESP_OK) {
-    log_e("esp_bt_controller_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    errRc = esp_bt_controller_enable(ESP_BT_MODE_BTDM);
+    if (errRc != ESP_OK) {
+      log_e("esp_bt_controller_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 #endif
 #endif  // !ARDUINO_ARCH_ESP32
 
-  esp_bluedroid_status_t bt_state = esp_bluedroid_get_status();
-  if (bt_state == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
-    errRc = esp_bluedroid_init();
-    if (errRc != ESP_OK) {
-      log_e("esp_bluedroid_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-      return false;
+    esp_bluedroid_status_t bt_state = esp_bluedroid_get_status();
+    if (bt_state == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
+      errRc = esp_bluedroid_init();
+      if (errRc != ESP_OK) {
+        log_e("esp_bluedroid_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+        return;
+      }
     }
-  }
 
-  if (bt_state != ESP_BLUEDROID_STATUS_ENABLED) {
-    errRc = esp_bluedroid_enable();
-    if (errRc != ESP_OK) {
-      log_e("esp_bluedroid_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-      return false;
+    if (bt_state != ESP_BLUEDROID_STATUS_ENABLED) {
+      errRc = esp_bluedroid_enable();
+      if (errRc != ESP_OK) {
+        log_e("esp_bluedroid_enable: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+        return;
+      }
     }
-  }
 
-  errRc = esp_ble_gap_register_callback(BLEDevice::gapEventHandler);
-  if (errRc != ESP_OK) {
-    log_e("esp_ble_gap_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    errRc = esp_ble_gap_register_callback(BLEDevice::gapEventHandler);
+    if (errRc != ESP_OK) {
+      log_e("esp_ble_gap_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 
 #ifdef CONFIG_GATTC_ENABLE  // Check that BLE client is configured in make menuconfig
-  errRc = esp_ble_gattc_register_callback(BLEDevice::gattClientEventHandler);
-  if (errRc != ESP_OK) {
-    log_e("esp_ble_gattc_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    errRc = esp_ble_gattc_register_callback(BLEDevice::gattClientEventHandler);
+    if (errRc != ESP_OK) {
+      log_e("esp_ble_gattc_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 #endif  // CONFIG_GATTC_ENABLE
 
 #ifdef CONFIG_GATTS_ENABLE  // Check that BLE server is configured in make menuconfig
-  errRc = esp_ble_gatts_register_callback(BLEDevice::gattServerEventHandler);
-  if (errRc != ESP_OK) {
-    log_e("esp_ble_gatts_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    errRc = esp_ble_gatts_register_callback(BLEDevice::gattServerEventHandler);
+    if (errRc != ESP_OK) {
+      log_e("esp_ble_gatts_register_callback: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 #endif  // CONFIG_GATTS_ENABLE
 
-  m_deviceName = deviceName;
-  errRc = ::esp_ble_gap_set_device_name(deviceName.c_str());
-  if (errRc != ESP_OK) {
-    log_e("esp_ble_gap_set_device_name: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  };
+    errRc = ::esp_ble_gap_set_device_name(deviceName.c_str());
+    if (errRc != ESP_OK) {
+      log_e("esp_ble_gap_set_device_name: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    };
 
 #ifdef CONFIG_BLE_SMP_ENABLE  // Check that BLE SMP (security) is configured in make menuconfig
-  esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;
-  errRc = ::esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
-  if (errRc != ESP_OK) {
-    log_e("esp_ble_gap_set_security_param: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  };
+    esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;
+    errRc = ::esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    if (errRc != ESP_OK) {
+      log_e("esp_ble_gap_set_security_param: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    };
 #endif  // CONFIG_BLE_SMP_ENABLE
 #endif  // CONFIG_BLUEDROID_ENABLED
 
 #if defined(CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE)
-  // Initialize esp-hosted transport for BLE HCI when explicitly enabled
-  if (!hostedInitBLE()) {
-    log_e("Failed to initialize ESP-Hosted for BLE");
-    return false;
-  }
+    // Initialize esp-hosted transport for BLE HCI when explicitly enabled
+    if (!hostedInitBLE()) {
+      log_e("Failed to initialize ESP-Hosted for BLE");
+      return;
+    }
 
-  // Hosted HCI driver will be initialized automatically by NimBLE transport layer
+    // Hosted HCI driver will be initialized automatically by NimBLE transport layer
 #endif
 
 #if defined(CONFIG_NIMBLE_ENABLED)
-  errRc = nimble_port_init();
-  if (errRc != ESP_OK) {
-    log_e("nimble_port_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-    return false;
-  }
+    errRc = nimble_port_init();
+    if (errRc != ESP_OK) {
+      log_e("nimble_port_init: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+      return;
+    }
 
-  // Global struct ble_hs_cfg from nimble/host/ble_hs.h needs to be initialized
-  ble_hs_cfg.reset_cb = BLEDevice::onReset;
-  ble_hs_cfg.sync_cb = BLEDevice::onSync;
-  ble_hs_cfg.store_status_cb = [](struct ble_store_status_event *event, void *arg) {
-    return m_pDeviceCallbacks->onStoreStatus(event, arg);
-  };
-  ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
-  ble_hs_cfg.sm_bonding = 0;
-  ble_hs_cfg.sm_mitm = 0;
-  ble_hs_cfg.sm_sc = 1;
-  ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
-  ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    // Global struct ble_hs_cfg from nimble/host/ble_hs.h needs to be initialized
+    ble_hs_cfg.reset_cb = BLEDevice::onReset;
+    ble_hs_cfg.sync_cb = BLEDevice::onSync;
+    ble_hs_cfg.store_status_cb = [](struct ble_store_status_event *event, void *arg) {
+      return m_pDeviceCallbacks->onStoreStatus(event, arg);
+    };
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_bonding = 0;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PRIVACY)
-  ble_hs_cfg.sm_our_key_dist |= BLE_SM_PAIR_KEY_DIST_ID;
-  ble_hs_cfg.sm_their_key_dist |= BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_our_key_dist |= BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist |= BLE_SM_PAIR_KEY_DIST_ID;
 #endif
 
-  // Store device name to be set after sync (GAP service not ready until then)
-  m_deviceName = deviceName;
+    errRc = ble_svc_gap_device_name_set(deviceName.c_str());
+    if (errRc != ESP_OK) {
+      log_e("ble_svc_gap_device_name_set: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+    }
 
-  ble_store_config_init();
-  nimble_port_freertos_init(BLEDevice::host_task);
+    ble_store_config_init();
+    nimble_port_freertos_init(BLEDevice::host_task);
 
-  while (!m_synced) {
-    ble_npl_time_delay(1);
+    while (!m_synced) {
+      ble_npl_time_delay(1);
+    }
+#endif                   // CONFIG_NIMBLE_ENABLED
+    initialized = true;  // Set the initialization flag to ensure we are only initialized once.
   }
-#endif  // CONFIG_NIMBLE_ENABLED
-
-  initialized = true;                    // Set the initialization flag to ensure we are only initialized once.
   vTaskDelay(200 / portTICK_PERIOD_MS);  // Delay for 200 msecs as a workaround to an apparent Arduino environment issue.
-  return true;
 }  // init
 
 /**
@@ -480,10 +429,6 @@ bool BLEDevice::init(String deviceName) {
  */
 void BLEDevice::setPower(esp_power_level_t powerLevel, esp_ble_power_type_t powerType) {
   log_v(">> setPower: %d (type: %d)", powerLevel, powerType);
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
 #if defined(SOC_BLE_SUPPORTED)
   esp_err_t errRc = ::esp_ble_tx_power_set(powerType, powerLevel);
   if (errRc != ESP_OK) {
@@ -514,10 +459,6 @@ void BLEDevice::setPower(esp_power_level_t powerLevel, esp_ble_power_type_t powe
  */
 
 int BLEDevice::getPower(esp_ble_power_type_t powerType) {
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return -128;  // Return error value
-  }
 #if SOC_BLE_SUPPORTED
   switch (esp_ble_tx_power_get(powerType)) {
     case ESP_PWR_LVL_N12: return -12;
@@ -548,10 +489,6 @@ void BLEDevice::setValue(BLEAddress bdAddress, BLEUUID serviceUUID, BLEUUID char
     characteristicUUID.toString().c_str()
   );
   BLEClient *pClient = createClient();
-  if (pClient == nullptr) {
-    log_e("Failed to create BLE client");
-    return;
-  }
   pClient->connect(bdAddress);
   pClient->setValue(serviceUUID, characteristicUUID, value);
   pClient->disconnect();
@@ -572,10 +509,6 @@ String BLEDevice::toString() {
  */
 void BLEDevice::whiteListAdd(BLEAddress address) {
   log_v(">> whiteListAdd: %s", address.toString().c_str());
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
 #ifdef CONFIG_BLUEDROID_ENABLED
 #ifdef ESP_IDF_VERSION_MAJOR
   esp_err_t errRc = esp_ble_gap_update_whitelist(true, address.getNative(), BLE_WL_ADDR_TYPE_PUBLIC);  // HACK!!! True to add an entry.
@@ -606,10 +539,6 @@ void BLEDevice::whiteListAdd(BLEAddress address) {
  */
 void BLEDevice::whiteListRemove(BLEAddress address) {
   log_v(">> whiteListRemove: %s", address.toString().c_str());
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
 #ifdef CONFIG_BLUEDROID_ENABLED
 #ifdef ESP_IDF_VERSION_MAJOR
   esp_err_t errRc = esp_ble_gap_update_whitelist(false, address.getNative(), BLE_WL_ADDR_TYPE_PUBLIC);  // HACK!!! False to remove an entry.
@@ -650,11 +579,7 @@ void BLEDevice::setSecurityCallbacks(BLESecurityCallbacks *callbacks) {
  * @param [in] mtu Value to set local mtu, should be larger than 23 and lower or equal to 517
  */
 esp_err_t BLEDevice::setMTU(uint16_t mtu) {
-  log_v(">> setLocalMTU: %u", mtu);
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return ESP_FAIL;
-  }
+  log_v(">> setLocalMTU: %d", mtu);
 
 #ifdef CONFIG_BLUEDROID_ENABLED
   esp_err_t err = esp_ble_gatt_set_local_mtu(mtu);
@@ -667,7 +592,7 @@ esp_err_t BLEDevice::setMTU(uint16_t mtu) {
   if (err == ESP_OK) {
     m_localMTU = mtu;
   } else {
-    log_e("can't set local mtu value: %u, rc=%d", mtu, err);
+    log_e("can't set local mtu value: %d, rc=%d", mtu, err);
   }
   log_v("<< setLocalMTU");
   return err;
@@ -684,14 +609,6 @@ bool BLEDevice::getInitialized() {
   return initialized;
 }
 
-/**
- * @brief Get the device name.
- * @return The device name.
- */
-String BLEDevice::getDeviceName() {
-  return m_deviceName;
-}
-
 /*
  * @brief Get a peer device's Identity Resolving Key (IRK).
  * @param [in] peerAddress The address of the bonded peer device.
@@ -701,11 +618,6 @@ String BLEDevice::getDeviceName() {
  */
 bool BLEDevice::getPeerIRK(BLEAddress peerAddress, uint8_t *irk) {
   log_v(">> BLEDevice::getPeerIRK()");
-
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return false;
-  }
 
   if (irk == nullptr) {
     log_e("IRK buffer is null");
@@ -733,44 +645,28 @@ bool BLEDevice::getPeerIRK(BLEAddress peerAddress, uint8_t *irk) {
     return false;
   }
 
-  // Find the bonded device that matches the peer address.
-  // Bluedroid may store the bond under the connection-time random address,
-  // so we also try matching against pid_key.static_addr (identity address) as a fallback.
+  // Find the bonded device that matches the peer address
   bool found = false;
 
   for (int i = 0; i < dev_num; i++) {
-    // Check if the PID key (which contains the IRK) is present first
-    if (!(bond_dev[i].bond_key.key_mask & ESP_LE_KEY_PID)) {
-      continue;
-    }
-
     BLEAddress bondAddr(bond_dev[i].bd_addr);
-    BLEAddress identityAddr(bond_dev[i].bond_key.pid_key.static_addr);
-
-    if (bondAddr.equals(peerAddress) || identityAddr.equals(peerAddress)) {
-      // Verify the IRK is non-zero before accepting it
-      bool irk_nonzero = false;
-      for (int j = 0; j < 16; j++) {
-        if (bond_dev[i].bond_key.pid_key.irk[j] != 0) {
-          irk_nonzero = true;
-          break;
-        }
+    if (bondAddr.equals(peerAddress)) {
+      // Check if the PID key (which contains the IRK) is present
+      if (bond_dev[i].bond_key.key_mask & ESP_LE_KEY_PID) {
+        memcpy(irk, bond_dev[i].bond_key.pid_key.irk, 16);
+        found = true;
+        log_d("IRK found for peer: %s", peerAddress.toString().c_str());
+        break;
+      } else {
+        log_w("PID key not present for peer: %s", peerAddress.toString().c_str());
       }
-      if (!irk_nonzero) {
-        log_w("PID key present but IRK is all zeroes for peer: %s", peerAddress.toString().c_str());
-        continue;
-      }
-      memcpy(irk, bond_dev[i].bond_key.pid_key.irk, 16);
-      found = true;
-      log_d("IRK found for peer: %s (bond addr: %s)", peerAddress.toString().c_str(), bondAddr.toString().c_str());
-      break;
     }
   }
 
   free(bond_dev);
 
   if (!found) {
-    log_e("IRK not found for peer: %s", peerAddress.toString().c_str());
+    log_e("IRK not found for peer");
     return false;
   }
 
@@ -821,7 +717,7 @@ bool BLEDevice::getPeerIRK(BLEAddress peerAddress, uint8_t *irk) {
   // Copy the IRK to the output buffer
   memcpy(irk, value_sec.irk, 16);
 
-  log_d("IRK found for peer: %s (type=%u)", peerAddress.toString().c_str(), addr.type);
+  log_d("IRK found for peer: %s (type=%d)", peerAddress.toString().c_str(), addr.type);
   log_v("<< BLEDevice::getPeerIRK()");
   return true;
 #endif  // CONFIG_NIMBLE_ENABLED
@@ -888,110 +784,7 @@ String BLEDevice::getPeerIRKReverse(BLEAddress peerAddress) {
   return result;
 }
 
-/*
- * @brief Get the local device's own Identity Resolving Key (IRK).
- * @param [out] irk Buffer to store the 16-byte IRK.
- * @return True if successful, false otherwise.
- * @note The local IRK is generated once and stored persistently.
- *       It is used to generate Resolvable Private Addresses (RPA).
- */
-bool BLEDevice::getLocalIRK(uint8_t *irk) {
-  log_v(">> BLEDevice::getLocalIRK()");
-
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return false;
-  }
-
-  if (irk == nullptr) {
-    log_e("IRK buffer is null");
-    return false;
-  }
-
-#if defined(CONFIG_BLUEDROID_ENABLED)
-  esp_err_t ret = esp_ble_gap_get_local_irk(irk);
-  if (ret != ESP_OK) {
-    log_e("Failed to get local IRK: %d", ret);
-    return false;
-  }
-  log_v("<< BLEDevice::getLocalIRK()");
-  return true;
-#endif  // CONFIG_BLUEDROID_ENABLED
-
-#if defined(CONFIG_NIMBLE_ENABLED)
-  int rc = ble_gap_read_local_irk(irk);
-  if (rc != 0) {
-    log_e("Failed to get local IRK: %d", rc);
-    return false;
-  }
-  log_v("<< BLEDevice::getLocalIRK()");
-  return true;
-#endif  // CONFIG_NIMBLE_ENABLED
-}
-
-/*
- * @brief Get the local device's IRK as a comma-separated hex string.
- * @return String in format "0xXX,0xXX,..." or empty string on failure.
- */
-String BLEDevice::getLocalIRKString() {
-  uint8_t irk[16];
-  if (!getLocalIRK(irk)) {
-    return String();
-  }
-
-  String result = "";
-  for (int i = 0; i < 16; i++) {
-    result += "0x";
-    if (irk[i] < 0x10) {
-      result += "0";
-    }
-    result += String(irk[i], HEX);
-    if (i < 15) {
-      result += ",";
-    }
-  }
-  return result;
-}
-
-/*
- * @brief Get the local device's IRK as a Base64 encoded string.
- * @return Base64 encoded string or empty string on failure.
- */
-String BLEDevice::getLocalIRKBase64() {
-  uint8_t irk[16];
-  if (!getLocalIRK(irk)) {
-    return String();
-  }
-
-  return base64::encode(irk, 16);
-}
-
-/*
- * @brief Get the local device's IRK in reverse hex format.
- * @return String in reverse hex format (uppercase) or empty string on failure.
- */
-String BLEDevice::getLocalIRKReverse() {
-  uint8_t irk[16];
-  if (!getLocalIRK(irk)) {
-    return String();
-  }
-
-  String result = "";
-  for (int i = 15; i >= 0; i--) {
-    if (irk[i] < 0x10) {
-      result += "0";
-    }
-    result += String(irk[i], HEX);
-  }
-  result.toUpperCase();
-  return result;
-}
-
 BLEAdvertising *BLEDevice::getAdvertising() {
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return nullptr;
-  }
   if (m_bleAdvertising == nullptr) {
     m_bleAdvertising = new BLEAdvertising();
     log_i("create advertising");
@@ -1002,20 +795,12 @@ BLEAdvertising *BLEDevice::getAdvertising() {
 
 void BLEDevice::startAdvertising() {
   log_v(">> startAdvertising");
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
   getAdvertising()->start();
   log_v("<< startAdvertising");
 }  // startAdvertising
 
 void BLEDevice::stopAdvertising() {
   log_v(">> stopAdvertising");
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
   getAdvertising()->stop();
   log_v("<< stopAdvertising");
 }  // stopAdvertising
@@ -1043,20 +828,24 @@ BLEClient *BLEDevice::getClientByAddress(BLEAddress address) {
   return nullptr;
 }
 
-uint16_t BLEDevice::getNextAppId() {
-  portENTER_CRITICAL(&mux);
-  uint16_t id = m_appId++;
-#if defined(CONFIG_BLUEDROID_ENABLED)
-  if (m_appId > ESP_APP_ID_MAX) {
-    m_appId = 0;
+void BLEDevice::updatePeerDevice(void *peer, bool _client, uint16_t conn_id) {
+  log_d("update conn_id: %d, GATT role: %s", conn_id, _client ? "client" : "server");
+  std::map<uint16_t, conn_status_t>::iterator it = m_connectedClientsMap.find(ESP_GATT_IF_NONE);
+  if (it != m_connectedClientsMap.end()) {
+    std::swap(m_connectedClientsMap[conn_id], it->second);
+    m_connectedClientsMap.erase(it);
+  } else {
+    it = m_connectedClientsMap.find(conn_id);
+    if (it != m_connectedClientsMap.end()) {
+      conn_status_t _st = it->second;
+      _st.peer_device = peer;
+      std::swap(m_connectedClientsMap[conn_id], _st);
+    }
   }
-#endif
-  portEXIT_CRITICAL(&mux);
-  return id;
 }
 
 void BLEDevice::addPeerDevice(void *peer, bool _client, uint16_t conn_id) {
-  log_i("add conn_id: %u, GATT role: %s", conn_id, _client ? "client" : "server");
+  log_i("add conn_id: %d, GATT role: %s", conn_id, _client ? "client" : "server");
   conn_status_t status = {.peer_device = peer, .connected = true, .mtu = 23};
 
   m_connectedClientsMap.insert(std::pair<uint16_t, conn_status_t>(conn_id, status));
@@ -1067,7 +856,7 @@ void BLEDevice::addPeerDevice(void *peer, bool _client, uint16_t conn_id) {
 portMUX_TYPE BLEDevice::mux = portMUX_INITIALIZER_UNLOCKED;
 void BLEDevice::removePeerDevice(uint16_t conn_id, bool _client) {
   portENTER_CRITICAL(&mux);
-  log_i("remove: %u, GATT role %s", conn_id, _client ? "client" : "server");
+  log_i("remove: %d, GATT role %s", conn_id, _client ? "client" : "server");
   if (m_connectedClientsMap.find(conn_id) != m_connectedClientsMap.end()) {
     m_connectedClientsMap.erase(conn_id);
   }
@@ -1141,8 +930,9 @@ void BLEDevice::deinit(bool release_memory) {
   // Only release memory if requested (this prevents reinitialization)
   if (release_memory) {
 #ifdef ARDUINO_ARCH_ESP32
+    // Require tests because we released classic BT memory and this can cause crash (most likely not, esp-idf takes care of it)
 #if CONFIG_BT_CONTROLLER_ENABLED
-    btMemRelease(BT_MODE_BLE);
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 #endif
 #endif
   }
@@ -1156,10 +946,6 @@ void BLEDevice::deinit(bool release_memory) {
 void BLEDevice::setCustomGapHandler(gap_event_handler handler) {
   m_customGapHandler = handler;
 #ifdef CONFIG_NIMBLE_ENABLED
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return;
-  }
   int rc = ble_gap_event_listener_register(&m_listener, handler, NULL);
   if (rc == BLE_HS_EALREADY) {
     log_i("Already listening to GAP events.");
@@ -1210,7 +996,7 @@ bool BLEDevice::isHostedBLE() {
  * @param [in] param Parameters for the event.
  */
 void BLEDevice::gattServerEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param) {
-  log_d("gattServerEventHandler [esp_gatt_if: %u] ... %s", gatts_if, BLEUtils::gattServerEventTypeToString(event).c_str());
+  log_d("gattServerEventHandler [esp_gatt_if: %d] ... %s", gatts_if, BLEUtils::gattServerEventTypeToString(event).c_str());
 
   BLEUtils::dumpGattServerEvent(event, gatts_if, param);
 
@@ -1250,7 +1036,7 @@ void BLEDevice::gattServerEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t
  */
 void BLEDevice::gattClientEventHandler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param) {
 
-  log_d("gattClientEventHandler [esp_gatt_if: %u] ... %s", gattc_if, BLEUtils::gattClientEventTypeToString(event).c_str());
+  log_d("gattClientEventHandler [esp_gatt_if: %d] ... %s", gattc_if, BLEUtils::gattClientEventTypeToString(event).c_str());
   BLEUtils::dumpGattClientEvent(event, gattc_if, param);
 
   switch (event) {
@@ -1267,16 +1053,10 @@ void BLEDevice::gattClientEventHandler(esp_gattc_cb_event_t event, esp_gatt_if_t
     default: break;
   }  // switch
   for (auto &myPair : BLEDevice::getPeerDevices(true)) {
-    BLEClient *client = (BLEClient *)myPair.second.peer_device;
-    esp_gatt_if_t client_if = client->getGattcIf();
-    bool dispatch = false;
-    if (client_if != ESP_GATT_IF_NONE && client_if == gattc_if) {
-      dispatch = true;
-    } else if (event == ESP_GATTC_REG_EVT && myPair.first == param->reg.app_id) {
-      dispatch = true;
-    }
-    if (dispatch) {
-      client->gattClientEventHandler(event, gattc_if, param);
+    conn_status_t conn_status = (conn_status_t)myPair.second;
+    if (((BLEClient *)conn_status.peer_device)->getGattcIf() == gattc_if || ((BLEClient *)conn_status.peer_device)->getGattcIf() == ESP_GATT_IF_NONE
+        || gattc_if == ESP_GATT_IF_NONE) {
+      ((BLEClient *)conn_status.peer_device)->gattClientEventHandler(event, gattc_if, param);
     }
   }
 
@@ -1327,10 +1107,10 @@ void BLEDevice::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_par
       }
 
       if (BLESecurity::m_staticPasskey && passkey == BLE_SM_DEFAULT_PASSKEY) {
-        log_w("*ATTENTION* Using default passkey: %06u", BLE_SM_DEFAULT_PASSKEY);
+        log_w("*ATTENTION* Using default passkey: %06d", BLE_SM_DEFAULT_PASSKEY);
         log_w("*ATTENTION* Please use a random passkey or set a different static passkey");
       } else {
-        log_i("Passkey: %06" PRIu32, passkey);
+        log_i("Passkey: %d", passkey);
       }
 
       esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, true, passkey);
@@ -1368,10 +1148,10 @@ void BLEDevice::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_par
       }
 
       if (BLESecurity::m_staticPasskey && passkey == BLE_SM_DEFAULT_PASSKEY) {
-        log_w("*ATTENTION* Using default passkey: %06u", BLE_SM_DEFAULT_PASSKEY);
+        log_w("*ATTENTION* Using default passkey: %06d", BLE_SM_DEFAULT_PASSKEY);
         log_w("*ATTENTION* Please use a random passkey or set a different static passkey");
       } else {
-        log_i("Passkey: %06" PRIu32, passkey);
+        log_i("Passkey: %d", passkey);
       }
 
       if (BLEDevice::m_securityCallbacks != nullptr) {
@@ -1391,43 +1171,20 @@ void BLEDevice::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_par
     {
       log_i("ESP_GAP_BLE_AUTH_CMPL_EVT");
 #ifdef CONFIG_BLE_SMP_ENABLE  // Check that BLE SMP (security) is configured in make menuconfig
-      // Call user callback BEFORE signaling completion.
-      // This ensures callback output (e.g., "Authentication complete") appears before
-      // any waiting GATT operations are unblocked and produce their own output.
-      // This matches NimBLE's ordering where the callback fires before the task is released.
+      // Signal that authentication has completed
+      // This unblocks any GATT operations waiting for pairing when bonding is enabled
+      BLESecurity::signalAuthenticationComplete();
+
       if (BLEDevice::m_securityCallbacks != nullptr) {
         BLEDevice::m_securityCallbacks->onAuthenticationComplete(param->ble_security.auth_cmpl);
       }
-
-      // Restore CCCD values for bonded device reconnection
-      // Per GATT spec, CCCD values should persist for bonded devices
-      // Windows and other hosts don't re-write CCCD after reconnection
-      if (param->ble_security.auth_cmpl.success && m_pServer != nullptr) {
-        BLEAddress peerAddress(param->ble_security.auth_cmpl.bd_addr);
-        m_pServer->restoreCCCDValues(peerAddress);
-      }
-
-      // Signal completion last - this unblocks any GATT operations waiting for pairing
-      BLESecurity::signalAuthenticationComplete();
 #endif  // CONFIG_BLE_SMP_ENABLE
     } break;
-    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
-    {
-      log_i(
-        "ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT: status=%d, conn_int=%u, latency=%u, timeout=%u", param->update_conn_params.status,
-        param->update_conn_params.conn_int, param->update_conn_params.latency, param->update_conn_params.timeout
-      );
-      break;
-    }
     default:
     {
       break;
     }
   }  // switch
-
-  if (BLEDevice::m_pServer != nullptr) {
-    BLEDevice::m_pServer->handleGAPEvent(event, param);
-  }
 
   if (BLEDevice::m_pClient != nullptr) {
     BLEDevice::m_pClient->handleGAPEvent(event, param);
@@ -1523,14 +1280,6 @@ void BLEDevice::onSync() {
     return;
   }
 
-  // Set device name first, before any other GAP operations
-  if (m_deviceName.length() > 0) {
-    int nameRc = ble_svc_gap_device_name_set(m_deviceName.c_str());
-    if (nameRc != 0) {
-      log_e("ble_svc_gap_device_name_set: rc=%d %s", nameRc, BLEUtils::returnCodeToString(nameRc));
-    }
-  }
-
   int rc = ble_hs_util_ensure_addr(0);
   if (rc == 0) {
     rc = ble_hs_util_ensure_addr(1);
@@ -1581,13 +1330,9 @@ void BLEDevice::setDeviceCallbacks(BLEDeviceCallbacks *cb) {
  * * 0x03: BLE_OWN_ADDR_RPA_RANDOM_DEFAULT - Resolvable private address, defaults to random static if no RPA available.
  */
 bool BLEDevice::setOwnAddrType(uint8_t type) {
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return false;
-  }
   int rc = ble_hs_id_copy_addr(type & 1, NULL, NULL);  // Odd values are random
   if (rc != 0) {
-    log_e("Unable to set address type %u, rc=%d", type, rc);
+    log_e("Unable to set address type %d, rc=%d", type, rc);
     return false;
   }
 
@@ -1625,10 +1370,6 @@ bool BLEDevice::setOwnAddr(BLEAddress &addr) {
  * @details To use the address generated the address type must be set to random with `setOwnAddrType`.
  */
 bool BLEDevice::setOwnAddr(uint8_t *addr) {
-  if (!initialized) {
-    log_e("BLE is not initialized. Call BLEDevice::init() first");
-    return false;
-  }
   int rc = ble_hs_id_set_rnd(addr);
   if (rc != 0) {
     log_e("Failed to set address, rc=%d", rc);

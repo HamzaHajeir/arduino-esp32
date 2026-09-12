@@ -13,7 +13,6 @@
 // limitations under the License.
 
 // Matter Manager
-#include <Arduino.h>
 #include <Matter.h>
 #if !CONFIG_ENABLE_CHIPOBLE
 // if the device can be commissioned using BLE, WiFi is not used - save flash space
@@ -46,24 +45,24 @@ bool button_state = false;                     // false = released | true = pres
 const uint32_t debounceTime = 250;             // button debouncing time (ms)
 const uint32_t decommissioningTimeout = 5000;  // keep the button pressed for 5s, or longer, to decommission
 
-// Local motor calibration (not exposed as Matter attributes in ESP-Matter 1.5)
-// Lift limits in centimeters (physical position at open/closed ends)
-// Matter percent: 0 = open at open limit, 100 = closed at closed limit
-const MatterWindowCovering::PositionCalibration LIFT_CALIBRATION = {.open = 0, .closed = 200};
+// Window covering limits
+// Lift limits in centimeters (physical position)
+const uint16_t MAX_LIFT = 200;  // Maximum lift position (fully open)
+const uint16_t MIN_LIFT = 0;    // Minimum lift position (fully closed)
 
 // Tilt limits (absolute values for conversion, not physical units)
 // Tilt is a rotation, not a linear measurement
-const MatterWindowCovering::PositionCalibration TILT_CALIBRATION = {.open = 0, .closed = 90};
+const uint16_t MAX_TILT = 90;  // Maximum tilt absolute value
+const uint16_t MIN_TILT = 0;   // Minimum tilt absolute value
 
 // Current window covering state
-// These will be initialized in setup() based on motor calibration and saved percentages
-// Matter percent: 0 = fully open, 100 = fully closed
-uint16_t currentLift = LIFT_CALIBRATION.open;  // Lift position in cm
-uint8_t currentLiftPercent = 0;
+// These will be initialized in setup() based on installed limits and saved percentages
+uint16_t currentLift = 0;  // Lift position in cm
+uint8_t currentLiftPercent = 100;
 uint8_t currentTiltPercent = 0;  // Tilt rotation percentage (0-100%)
 
 // Visualize window covering position using RGB LED
-// Brightness follows openness (inverted Matter percent: more open = brighter)
+// Lift percentage controls brightness (0% = off, 100% = full brightness)
 #ifdef RGB_BUILTIN
 const uint8_t ledPin = RGB_BUILTIN;
 #else
@@ -74,9 +73,7 @@ const uint8_t ledPin = 2;  // Set your pin here if your board has not defined RG
 void visualizeWindowBlinds(uint8_t liftPercent, uint8_t tiltPercent) {
 #ifdef RGB_BUILTIN
   // Use RGB LED to visualize lift position (brightness) and tilt (color shift)
-  // Brighter when more open (lower Matter percent)
-  uint8_t openness = 100 - liftPercent;
-  float brightness = (float)openness / 100.0;  // 0.0 to 1.0
+  float brightness = (float)liftPercent / 100.0;  // 0.0 to 1.0
   // Tilt affects color: 0% = red, 100% = blue
   uint8_t red = (uint8_t)(map(tiltPercent, 0, 100, 255, 0) * brightness);
   uint8_t blue = (uint8_t)(map(tiltPercent, 0, 100, 0, 255) * brightness);
@@ -84,32 +81,22 @@ void visualizeWindowBlinds(uint8_t liftPercent, uint8_t tiltPercent) {
   rgbLedWrite(ledPin, red, green, blue);
 #else
   // For non-RGB boards, just use brightness
-  uint8_t openness = 100 - liftPercent;
-  uint8_t brightnessValue = map(openness, 0, 100, 0, 255);
+  uint8_t brightnessValue = map(liftPercent, 0, 100, 0, 255);
   analogWrite(ledPin, brightnessValue);
 #endif
-}
-
-// Convert Matter lift percent (0 = open, 100 = closed) to local motor units (cm)
-static uint16_t liftPercentToCm(uint8_t liftPercent) {
-  const auto cal = WindowBlinds.getLiftCalibration();
-  // Linear interpolation: 0% = open limit, 100% = closed limit
-  if (cal.open < cal.closed) {
-    return cal.open + ((cal.closed - cal.open) * liftPercent) / 100;
-  }
-  return cal.open - ((cal.open - cal.closed) * liftPercent) / 100;
 }
 
 // Window Covering Callbacks
 bool fullOpen() {
   // This is where you would trigger your motor to go to full open state
   // For simulation, we update instantly
-  currentLift = WindowBlinds.getLiftCalibration().open;
-  currentLiftPercent = 0;
-  Serial.printf("Opening window covering to full open (position: %u cm)\r\n", currentLift);
+  uint16_t openLimit = WindowBlinds.getInstalledOpenLimitLift();
+  currentLift = openLimit;
+  currentLiftPercent = 100;
+  Serial.printf("Opening window covering to full open (position: %d cm)\r\n", currentLift);
 
-  // Update CurrentPosition to reflect actual position (Percent100ths on the Matter cluster)
-  WindowBlinds.setCurrentLiftPercent100ths(0);
+  // Update CurrentPosition to reflect actual position (setLiftPercentage now only updates CurrentPosition)
+  WindowBlinds.setLiftPercentage(currentLiftPercent);
 
   // Set operational status to STALL when movement is complete
   WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::STALL);
@@ -123,12 +110,13 @@ bool fullOpen() {
 bool fullClose() {
   // This is where you would trigger your motor to go to full close state
   // For simulation, we update instantly
-  currentLift = WindowBlinds.getLiftCalibration().closed;
-  currentLiftPercent = 100;
-  Serial.printf("Closing window covering to full close (position: %u cm)\r\n", currentLift);
+  uint16_t closedLimit = WindowBlinds.getInstalledClosedLimitLift();
+  currentLift = closedLimit;
+  currentLiftPercent = 0;
+  Serial.printf("Closing window covering to full close (position: %d cm)\r\n", currentLift);
 
-  // Update CurrentPosition to reflect actual position (Percent100ths on the Matter cluster)
-  WindowBlinds.setCurrentLiftPercent100ths(10000);
+  // Update CurrentPosition to reflect actual position (setLiftPercentage now only updates CurrentPosition)
+  WindowBlinds.setLiftPercentage(currentLiftPercent);
 
   // Set operational status to STALL when movement is complete
   WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::STALL);
@@ -142,21 +130,31 @@ bool fullClose() {
 bool goToLiftPercentage(uint8_t liftPercent) {
   // update Lift operational state
   if (liftPercent > currentLiftPercent) {
-    // Set operational status to CLOSE
-    WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::MOVING_DOWN_OR_CLOSE);
-  } else if (liftPercent < currentLiftPercent) {
     // Set operational status to OPEN
     WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::MOVING_UP_OR_OPEN);
+  }
+  if (liftPercent < currentLiftPercent) {
+    // Set operational status to CLOSE
+    WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::MOVING_DOWN_OR_CLOSE);
   }
 
   // This is where you would trigger your motor to go towards liftPercent
   // For simulation, we update instantly
-  currentLift = liftPercentToCm(liftPercent);
-  currentLiftPercent = liftPercent;
-  Serial.printf("Moving lift to %u%% (position: %u cm)\r\n", currentLiftPercent, currentLift);
+  // Calculate absolute position based on installed limits
+  uint16_t openLimit = WindowBlinds.getInstalledOpenLimitLift();
+  uint16_t closedLimit = WindowBlinds.getInstalledClosedLimitLift();
 
-  // Update CurrentPosition to reflect actual position (Percent100ths on the Matter cluster)
-  WindowBlinds.setCurrentLiftPercent100ths(liftPercent * 100);
+  // Linear interpolation: 0% = openLimit, 100% = closedLimit
+  if (openLimit < closedLimit) {
+    currentLift = openLimit + ((closedLimit - openLimit) * liftPercent) / 100;
+  } else {
+    currentLift = openLimit - ((openLimit - closedLimit) * liftPercent) / 100;
+  }
+  currentLiftPercent = liftPercent;
+  Serial.printf("Moving lift to %d%% (position: %d cm)\r\n", currentLiftPercent, currentLift);
+
+  // Update CurrentPosition to reflect actual position (setLiftPercentage now only updates CurrentPosition)
+  WindowBlinds.setLiftPercentage(currentLiftPercent);
 
   // Set operational status to STALL when movement is complete
   WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::STALL);
@@ -169,21 +167,22 @@ bool goToLiftPercentage(uint8_t liftPercent) {
 
 bool goToTiltPercentage(uint8_t tiltPercent) {
   // update Tilt operational state
+  if (tiltPercent < currentTiltPercent) {
+    // Set operational status to OPEN
+    WindowBlinds.setOperationalState(MatterWindowCovering::TILT, MatterWindowCovering::MOVING_UP_OR_OPEN);
+  }
   if (tiltPercent > currentTiltPercent) {
     // Set operational status to CLOSE
     WindowBlinds.setOperationalState(MatterWindowCovering::TILT, MatterWindowCovering::MOVING_DOWN_OR_CLOSE);
-  } else if (tiltPercent < currentTiltPercent) {
-    // Set operational status to OPEN
-    WindowBlinds.setOperationalState(MatterWindowCovering::TILT, MatterWindowCovering::MOVING_UP_OR_OPEN);
   }
 
   // This is where you would trigger your motor to rotate the shade to tiltPercent
   // For simulation, we update instantly
   currentTiltPercent = tiltPercent;
-  Serial.printf("Rotating tilt to %u%%\r\n", currentTiltPercent);
+  Serial.printf("Rotating tilt to %d%%\r\n", currentTiltPercent);
 
-  // Update CurrentPosition to reflect actual position (Percent100ths on the Matter cluster)
-  WindowBlinds.setCurrentTiltPercent100ths(tiltPercent * 100);
+  // Update CurrentPosition to reflect actual position
+  WindowBlinds.setTiltPercentage(currentTiltPercent);
 
   // Set operational status to STALL when movement is complete
   WindowBlinds.setOperationalState(MatterWindowCovering::TILT, MatterWindowCovering::STALL);
@@ -199,8 +198,9 @@ bool stopMotor() {
   Serial.println("Stopping window covering motor");
 
   // Update CurrentPosition to reflect actual position when stopped
-  WindowBlinds.setCurrentLiftPercent100ths(currentLiftPercent * 100);
-  WindowBlinds.setCurrentTiltPercent100ths(currentTiltPercent * 100);
+  // (setLiftPercentage and setTiltPercentage now only update CurrentPosition)
+  WindowBlinds.setLiftPercentage(currentLiftPercent);
+  WindowBlinds.setTiltPercentage(currentTiltPercent);
 
   // Set operational status to STALL for both lift and tilt
   WindowBlinds.setOperationalState(MatterWindowCovering::LIFT, MatterWindowCovering::STALL);
@@ -238,24 +238,37 @@ void setup() {
 
   // Initialize Matter EndPoint
   matterPref.begin("MatterPrefs", false);
-  // default lift percentage is 0% (fully open) if not stored before — Matter semantics
-  uint8_t lastLiftPercent = matterPref.getUChar(liftPercentPrefKey, 0);
+  // default lift percentage is 100% (fully open) if not stored before
+  uint8_t lastLiftPercent = matterPref.getUChar(liftPercentPrefKey, 100);
   // default tilt percentage is 0% if not stored before
   uint8_t lastTiltPercent = matterPref.getUChar(tiltPercentPrefKey, 0);
 
-  // Initialize window covering with BLIND_LIFT_AND_TILT type and local motor calibration
-  WindowBlinds.begin(lastLiftPercent, lastTiltPercent, MatterWindowCovering::BLIND_LIFT_AND_TILT, &LIFT_CALIBRATION, &TILT_CALIBRATION);
+  // Initialize window covering with BLIND_LIFT_AND_TILT type
+  WindowBlinds.begin(lastLiftPercent, lastTiltPercent, MatterWindowCovering::BLIND_LIFT_AND_TILT);
 
-  // Initialize current positions based on percentages and motor calibration
+  // Configure installed limits for lift and tilt
+  WindowBlinds.setInstalledOpenLimitLift(MIN_LIFT);
+  WindowBlinds.setInstalledClosedLimitLift(MAX_LIFT);
+  WindowBlinds.setInstalledOpenLimitTilt(MIN_TILT);
+  WindowBlinds.setInstalledClosedLimitTilt(MAX_TILT);
+
+  // Initialize current positions based on percentages and installed limits
+  uint16_t openLimitLift = WindowBlinds.getInstalledOpenLimitLift();
+  uint16_t closedLimitLift = WindowBlinds.getInstalledClosedLimitLift();
   currentLiftPercent = lastLiftPercent;
-  currentLift = liftPercentToCm(lastLiftPercent);
+  if (openLimitLift < closedLimitLift) {
+    currentLift = openLimitLift + ((closedLimitLift - openLimitLift) * lastLiftPercent) / 100;
+  } else {
+    currentLift = openLimitLift - ((openLimitLift - closedLimitLift) * lastLiftPercent) / 100;
+  }
+
   currentTiltPercent = lastTiltPercent;
 
   Serial.printf(
-    "Motor calibration: Lift [%u-%u cm], Tilt [%u-%u]\r\n", WindowBlinds.getLiftCalibration().open, WindowBlinds.getLiftCalibration().closed,
-    WindowBlinds.getTiltCalibration().open, WindowBlinds.getTiltCalibration().closed
+    "Window Covering limits configured: Lift [%d-%d cm], Tilt [%d-%d]\r\n", WindowBlinds.getInstalledOpenLimitLift(),
+    WindowBlinds.getInstalledClosedLimitLift(), WindowBlinds.getInstalledOpenLimitTilt(), WindowBlinds.getInstalledClosedLimitTilt()
   );
-  Serial.printf("Initial positions: Lift=%u cm (%u%%), Tilt=%u%%\r\n", currentLift, currentLiftPercent, currentTiltPercent);
+  Serial.printf("Initial positions: Lift=%d cm (%d%%), Tilt=%d%%\r\n", currentLift, currentLiftPercent, currentTiltPercent);
 
   // Set callback functions
   WindowBlinds.onOpen(fullOpen);
@@ -266,7 +279,7 @@ void setup() {
 
   // Generic callback for Lift or Tilt change
   WindowBlinds.onChange([](uint8_t liftPercent, uint8_t tiltPercent) {
-    Serial.printf("Window Covering changed: Lift=%u%%, Tilt=%u%%\r\n", liftPercent, tiltPercent);
+    Serial.printf("Window Covering changed: Lift=%d%%, Tilt=%d%%\r\n", liftPercent, tiltPercent);
     visualizeWindowBlinds(liftPercent, tiltPercent);
     return true;
   });
@@ -276,7 +289,7 @@ void setup() {
   // This may be a restart of a already commissioned Matter accessory
   if (Matter.isDeviceCommissioned()) {
     Serial.println("Matter Node is commissioned and connected to the network. Ready for use.");
-    Serial.printf("Initial state: Lift=%u%%, Tilt=%u%%\r\n", WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
+    Serial.printf("Initial state: Lift=%d%%, Tilt=%d%%\r\n", WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
     // Update visualization based on initial state
     visualizeWindowBlinds(WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
   }
@@ -299,7 +312,7 @@ void loop() {
         Serial.println("Matter Node not commissioned yet. Waiting for commissioning.");
       }
     }
-    Serial.printf("Initial state: Lift=%u%%, Tilt=%u%%\r\n", WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
+    Serial.printf("Initial state: Lift=%d%%, Tilt=%d%%\r\n", WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
     // Update visualization based on initial state
     visualizeWindowBlinds(WindowBlinds.getLiftPercentage(), WindowBlinds.getTiltPercentage());
     Serial.println("Matter Node is commissioned and connected to the network. Ready for use.");
@@ -328,14 +341,14 @@ void loop() {
     if (targetLiftPercent > 100) {
       targetLiftPercent = 0;
     }
-    Serial.printf("User button released. Setting lift to %u%%\r\n", targetLiftPercent);
+    Serial.printf("User button released. Setting lift to %d%%\r\n", targetLiftPercent);
     WindowBlinds.setTargetLiftPercent100ths(targetLiftPercent * 100);
   }
 
   // Onboard User Button is kept pressed for longer than 5 seconds in order to decommission matter node
   if (button_state && time_diff > decommissioningTimeout) {
     Serial.println("Decommissioning the Window Covering Matter Accessory. It shall be commissioned again.");
-    WindowBlinds.setCurrentLiftPercent100ths(10000);  // fully closed
+    WindowBlinds.setLiftPercentage(0);  // close the covering
     Matter.decommission();
     button_time_stamp = millis();  // avoid running decommissioning again, reboot takes a second or so
   }

@@ -143,12 +143,8 @@ bool WebServer::authenticateBasicSHA1(const char *_username, const char *_sha1Ba
 
 bool WebServer::authenticate(const char *_username, const char *_password) {
   return WebServer::authenticate([_username, _password](HTTPAuthMethod mode, String username, String params[]) -> String * {
+    (void)mode;
     (void)params;
-    // Plaintext-password auth only applies to Basic/Digest. A bare or unknown
-    // Authorization scheme must not be treated as a successful username match.
-    if (mode != BASIC_AUTH && mode != DIGEST_AUTH) {
-      return NULL;
-    }
     return username.equalsConstantTime(_username) ? new String(_password) : NULL;
   });
 }
@@ -204,17 +200,6 @@ bool WebServer::authenticate(THandlerFunctionAuthCheck fn) {
     String _realm = _extractParam(authReq, F("realm=\""), '\"');
     String _uri = _extractParam(authReq, F("uri=\""), '\"');
     if (!_username.length()) {
-      goto exf;
-    }
-    // The digest "uri" parameter may include a query string, while _currentUri
-    // is parsed without it. Normalize by comparing only the path portion.
-    String _uriPath = _uri;
-    int qmarkIndex = _uriPath.indexOf('?');
-    if (qmarkIndex >= 0) {
-      _uriPath = _uriPath.substring(0, qmarkIndex);
-    }
-    if (_uriPath != _currentUri) {
-      log_e("Authentication Failed: URI mismatch");
       goto exf;
     }
 
@@ -296,7 +281,7 @@ String WebServer::_getRandomHexString() {
   char buffer[33];  // buffer to hold 32 Hex Digit + /0
   int i;
   for (i = 0; i < 4; i++) {
-    snprintf(buffer + (i * 8), sizeof(buffer) - (size_t)(i * 8), "%08" PRIx32, esp_random());
+    sprintf(buffer + (i * 8), "%08lx", esp_random());
   }
   return String(buffer);
 }
@@ -599,7 +584,7 @@ void WebServer::chunkWrite(const char *data, size_t length) {
   }
 
   char chunkSize[11];
-  snprintf(chunkSize, sizeof(chunkSize), "%lx\r\n", (unsigned long)length);
+  snprintf(chunkSize, sizeof(chunkSize), "%zx\r\n", length);
 
   if (_chunkedClient.write(chunkSize) != strlen(chunkSize)) {
     log_e("Failed to write chunk size");
@@ -709,20 +694,6 @@ void WebServer::send(int code, const char *content_type, const char *content) {
   send(code, content_type, passStr);
 }
 
-void WebServer::send(int code, const char *content_type, Stream &stream, size_t content_length) {
-  if (!content_length) {
-    content_length = stream.available();
-    if (!content_length) {
-      send(204);
-      return;
-    }
-  }
-  String header;
-  _prepareHeader(header, code, content_type, content_length);
-  _currentClientWrite(header.c_str(), header.length());
-  _currentClient.write(stream, content_length);
-}
-
 void WebServer::send_P(int code, PGM_P content_type, PGM_P content) {
   size_t contentLength = 0;
 
@@ -754,9 +725,9 @@ void WebServer::sendContent(const String &content) {
 void WebServer::sendContent(const char *content, size_t contentLength) {
   const char *footer = "\r\n";
   if (_chunked) {
-    char *chunkSize = (char *)malloc(19);
+    char *chunkSize = (char *)malloc(11);
     if (chunkSize) {
-      snprintf(chunkSize, 19, "%lx%s", (unsigned long)contentLength, footer);
+      sprintf(chunkSize, "%x%s", contentLength, footer);
       _currentClientWrite(chunkSize, strlen(chunkSize));
       free(chunkSize);
     }
@@ -777,9 +748,9 @@ void WebServer::sendContent_P(PGM_P content) {
 void WebServer::sendContent_P(PGM_P content, size_t size) {
   const char *footer = "\r\n";
   if (_chunked) {
-    char *chunkSize = (char *)malloc(19);
+    char *chunkSize = (char *)malloc(11);
     if (chunkSize) {
-      snprintf(chunkSize, 19, "%lx%s", (unsigned long)size, footer);
+      sprintf(chunkSize, "%x%s", size, footer);
       _currentClientWrite(chunkSize, strlen(chunkSize));
       free(chunkSize);
     }
@@ -801,7 +772,6 @@ void WebServer::_streamFileCore(const size_t fileSize, const String &fileName, c
     sendHeader(F("Content-Encoding"), F("gzip"));
   }
   send(code, contentType, "");
-  setContentLength(CONTENT_LENGTH_NOT_SET);
 }
 
 String WebServer::pathArg(unsigned int i) const {

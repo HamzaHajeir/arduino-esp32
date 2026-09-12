@@ -7,7 +7,6 @@
 #include <stdbool.h>
 
 #include "esp_log.h"
-#include "esp_idf_version.h"
 
 #include "soc/soc.h"
 #include "soc/efuse_reg.h"
@@ -18,9 +17,6 @@
 #include "soc/usb_wrap_reg.h"
 #include "soc/usb_wrap_struct.h"
 #include "soc/usb_periph.h"
-#endif
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0) && (CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3)
-#include "soc/usb_pins.h"
 #endif
 
 #include "soc/periph_defs.h"
@@ -216,7 +212,7 @@ static tusb_desc_device_t tinyusb_device_descriptor = {
   .bDeviceClass = 0,
   .bDeviceSubClass = 0,
   .bDeviceProtocol = 0,
-  .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+  .bMaxPacketSize0 = CFG_TUD_ENDOINT0_SIZE,
 
   .idVendor = 0,
   .idProduct = 0,
@@ -527,14 +523,9 @@ static void hw_cdc_reset_handler(void *arg) {
 static void usb_switch_to_cdc_jtag() {
   // Disable USB-OTG
   deinit_usb_hal();
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
-  periph_ll_reset(PERIPH_MODULE_MAX);
-  periph_ll_disable_clk_set_rst(PERIPH_MODULE_MAX);
-#else
   periph_ll_reset(PERIPH_USB_MODULE);
   //periph_ll_enable_clk_clear_rst(PERIPH_USB_MODULE);
   periph_ll_disable_clk_set_rst(PERIPH_USB_MODULE);
-#endif
 
   // Switch to hardware CDC+JTAG
   CLEAR_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG, (RTC_CNTL_SW_HW_USB_PHY_SEL | RTC_CNTL_SW_USB_PHY_SEL | RTC_CNTL_USB_PAD_ENABLE));
@@ -604,13 +595,8 @@ static void IRAM_ATTR usb_persist_shutdown_handler(void) {
         chip_usb_set_persist_flags(USBDC_PERSIST_ENA);
 #if CONFIG_IDF_TARGET_ESP32S2
       } else {
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
-        periph_ll_reset(PERIPH_MODULE_MAX);
-        periph_ll_enable_clk_clear_rst(PERIPH_MODULE_MAX);
-#else
         periph_ll_reset(PERIPH_USB_MODULE);
         periph_ll_enable_clk_clear_rst(PERIPH_USB_MODULE);
-#endif
 #endif
       }
       REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
@@ -714,9 +700,7 @@ static bool tinyusb_load_enabled_interfaces() {
     //usb_persist_enabled = true;
     //log_d("USB Persist enabled");
   }
-  log_d(
-    "Load Done: if_num: %u, descr_len: %u, if_mask: 0x%" PRIx32, tinyusb_loaded_interfaces_num, tinyusb_config_descriptor_len, tinyusb_loaded_interfaces_mask
-  );
+  log_d("Load Done: if_num: %u, descr_len: %u, if_mask: 0x%x", tinyusb_loaded_interfaces_num, tinyusb_config_descriptor_len, tinyusb_loaded_interfaces_mask);
   return true;
 }
 
@@ -805,7 +789,7 @@ static void usb_device_task(void *param) {
  * PUBLIC API
  * */
 #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR
-const char *tinyusb_interface_names[USB_INTERFACE_MAX] = {"MSC", "DFU", "HID", "VENDOR", "CDC", "CDC2", "MIDI", "AUDIO", "CUSTOM"};
+const char *tinyusb_interface_names[USB_INTERFACE_MAX] = {"MSC", "DFU", "HID", "VENDOR", "CDC", "CDC2", "MIDI", "CUSTOM"};
 #endif
 static bool tinyusb_is_initialized = false;
 
@@ -865,13 +849,8 @@ esp_err_t tinyusb_init(tinyusb_device_config_t *config) {
   //} else
   if (!usb_did_persist || !usb_persist_enabled) {
     // Reset USB module
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
-    periph_ll_reset(PERIPH_MODULE_MAX);
-    periph_ll_enable_clk_clear_rst(PERIPH_MODULE_MAX);
-#else
     periph_ll_reset(PERIPH_USB_MODULE);
     periph_ll_enable_clk_clear_rst(PERIPH_USB_MODULE);
-#endif
   }
 #endif
 

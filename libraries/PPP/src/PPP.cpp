@@ -7,17 +7,7 @@
 #include <string>
 #include "driver/uart.h"
 #include "hal/uart_ll.h"
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 1, 0)
 #include "esp_private/uart_share_hw_ctrl.h"
-#else
-#include "soc/soc_caps.h"
-#include "esp_private/periph_ctrl.h"
-#if SOC_PERIPH_CLK_CTRL_SHARED
-#define HP_UART_SRC_CLK_ATOMIC() PERIPH_RCC_ATOMIC()
-#else
-#define HP_UART_SRC_CLK_ATOMIC()
-#endif
-#endif
 
 #define PPP_CMD_MODE_CHECK(x)                                    \
   if (_dce == NULL) {                                            \
@@ -100,12 +90,12 @@ static void onPppArduinoEvent(arduino_event_id_t event, arduino_event_info_t inf
 
 // PPP Error Callback
 static void _ppp_error_cb(esp_modem_terminal_error_t err) {
-  log_v("PPP Driver Error %d: %s", err, _ppp_terminal_error_name(err));
+  log_v("PPP Driver Error %ld: %s", err, _ppp_terminal_error_name(err));
 }
 
 // PPP Arduino Events Callback
 void PPPClass::_onPppArduinoEvent(arduino_event_id_t event, arduino_event_info_t info) {
-  log_v("PPP Arduino Event %d: %s", event, Network.eventName(event));
+  log_v("PPP Arduino Event %ld: %s", event, Network.eventName(event));
   // if(event == ARDUINO_EVENT_PPP_GOT_IP){
   //     if((getStatusBits() & ESP_NETIF_CONNECTED_BIT) == 0){
   //         setStatusBits(ESP_NETIF_CONNECTED_BIT);
@@ -129,7 +119,7 @@ void PPPClass::_onPppEvent(int32_t event, void *event_data) {
   arduino_event_t arduino_event;
   arduino_event.event_id = ARDUINO_EVENT_MAX;
 
-  log_v("PPP Driver Event %" PRId32 ": %s", event, _ppp_event_name(event));
+  log_v("PPP Driver Event %ld: %s", event, _ppp_event_name(event));
 
   if (event == NETIF_PPP_ERRORNONE) {
     if ((getStatusBits() & ESP_NETIF_CONNECTED_BIT) == 0) {
@@ -151,8 +141,8 @@ esp_modem_dce_t *PPPClass::handle() const {
 
 PPPClass::PPPClass()
   : _dce(NULL), _pin_tx(-1), _pin_rx(-1), _pin_rts(-1), _pin_cts(-1), _flow_ctrl(ESP_MODEM_FLOW_CONTROL_NONE), _pin_rst(-1), _pin_rst_act_low(true),
-    _pin_rst_delay(200), _boot_delay(100), _sendAtBurst(false), _pin(NULL), _apn(NULL), _rx_buffer_size(4096), _tx_buffer_size(512),
-    _mode(ESP_MODEM_MODE_COMMAND), _uart_num(UART_NUM_1), _ppp_event_handle(0) {}
+    _pin_rst_delay(200), _pin(NULL), _apn(NULL), _rx_buffer_size(4096), _tx_buffer_size(512), _mode(ESP_MODEM_MODE_COMMAND), _uart_num(UART_NUM_1),
+    _ppp_event_handle(0) {}
 
 PPPClass::~PPPClass() {}
 
@@ -162,15 +152,10 @@ bool PPPClass::pppDetachBus(void *bus_pointer) {
   return true;
 }
 
-void PPPClass::setResetPin(int8_t rst, bool active_low, uint32_t reset_delay, uint32_t boot_delay) {
+void PPPClass::setResetPin(int8_t rst, bool active_low, uint32_t reset_delay) {
   _pin_rst = digitalPinToGPIONumber(rst);
   _pin_rst_act_low = active_low;
   _pin_rst_delay = reset_delay;
-  _boot_delay = boot_delay;
-}
-
-void PPPClass::sendAtBurst(bool en) {
-  _sendAtBurst = en;
 }
 
 bool PPPClass::setPins(int8_t tx, int8_t rx, int8_t rts, int8_t cts, esp_modem_flow_ctrl_t flow_ctrl) {
@@ -303,7 +288,7 @@ bool PPPClass::begin(ppp_modem_model_t model, uint8_t uart_num, int baud_rate) {
     digitalWrite(_pin_rst, !_pin_rst_act_low);
     delay(_pin_rst_delay);
     digitalWrite(_pin_rst, _pin_rst_act_low);
-    delay(_boot_delay);
+    delay(100);
   }
 
   /* Start the DCE */
@@ -314,13 +299,6 @@ bool PPPClass::begin(ppp_modem_model_t model, uint8_t uart_num, int baud_rate) {
   }
 
   esp_modem_set_error_cb(_dce, _ppp_error_cb);
-
-  if (_sendAtBurst) {
-    // Send burst of AT to lock auto baurate on modem
-    for (int i = 0; i < 50; i++) {
-      esp_modem_at(_dce, "AT", NULL, 10);
-    }
-  }
 
   /* Wait for Modem to respond */
   if (_pin_rst >= 0) {
@@ -560,7 +538,7 @@ int PPPClass::BER() const {
 String PPPClass::IMSI() const {
   PPP_CMD_MODE_CHECK(String());
 
-  char imsi[CONFIG_ESP_MODEM_C_API_STR_MAX];
+  char imsi[32];
   esp_err_t err = esp_modem_get_imsi(_dce, imsi);
   if (err != ESP_OK) {
     log_e("esp_modem_get_imsi failed with %d %s", err, esp_err_to_name(err));
@@ -573,7 +551,7 @@ String PPPClass::IMSI() const {
 String PPPClass::IMEI() const {
   PPP_CMD_MODE_CHECK(String());
 
-  char imei[CONFIG_ESP_MODEM_C_API_STR_MAX];
+  char imei[32];
   esp_err_t err = esp_modem_get_imei(_dce, imei);
   if (err != ESP_OK) {
     log_e("esp_modem_get_imei failed with %d %s", err, esp_err_to_name(err));
@@ -586,7 +564,7 @@ String PPPClass::IMEI() const {
 String PPPClass::moduleName() const {
   PPP_CMD_MODE_CHECK(String());
 
-  char name[CONFIG_ESP_MODEM_C_API_STR_MAX];
+  char name[32];
   esp_err_t err = esp_modem_get_module_name(_dce, name);
   if (err != ESP_OK) {
     log_e("esp_modem_get_module_name failed with %d %s", err, esp_err_to_name(err));
@@ -599,7 +577,7 @@ String PPPClass::moduleName() const {
 String PPPClass::operatorName() const {
   PPP_CMD_MODE_CHECK(String());
 
-  char oper[CONFIG_ESP_MODEM_C_API_STR_MAX];
+  char oper[32];
   int act = 0;
   esp_err_t err = esp_modem_get_operator_name(_dce, oper, &act);
   if (err != ESP_OK) {
@@ -759,7 +737,7 @@ bool PPPClass::sms(const char *num, const char *message) {
 String PPPClass::cmd(const char *at_command, int timeout) {
   PPP_CMD_MODE_CHECK(String());
 
-  char out[CONFIG_ESP_MODEM_C_API_STR_MAX + 1] = {0};
+  char out[128] = {0};
   esp_err_t err = esp_modem_at(_dce, at_command, out, timeout);
   if (err != ESP_OK) {
     log_e("esp_modem_at failed %d %s", err, esp_err_to_name(err));
@@ -771,7 +749,7 @@ String PPPClass::cmd(const char *at_command, int timeout) {
 bool PPPClass::cmd(const char *at_command, String &response, int timeout) {
   PPP_CMD_MODE_CHECK(false);
 
-  char out[CONFIG_ESP_MODEM_C_API_STR_MAX + 1] = {0};
+  char out[128] = {0};
   esp_err_t err = esp_modem_at(_dce, at_command, out, timeout);
   response = String(out);
 

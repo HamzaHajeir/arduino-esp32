@@ -43,21 +43,15 @@ Initialization
 begin
 ^^^^^
 
-Initializes the Matter rain sensor endpoint. Fabric ``StateValue`` starts ``false`` (not detected). Call ``setRain()`` after ``Matter.begin()`` with the real sensor reading.
+Initializes the Matter rain sensor endpoint with an initial rain detection state.
 
 .. code-block:: arduino
 
-    bool begin();
+    bool begin(bool _rainState = false);
+
+* ``_rainState`` - Initial rain detection state (``true`` = detected, ``false`` = not detected, default: ``false``)
 
 This function will return ``true`` if successful, ``false`` otherwise.
-
-Typical usage:
-
-.. code-block:: arduino
-
-    RainSensor.begin();
-    Matter.begin();
-    RainSensor.setRain(digitalRead(rainPin));
 
 end
 ^^^
@@ -74,7 +68,7 @@ Rain Detection State Control
 setRain
 ^^^^^^^
 
-Sets the rain detection state. Call after ``Matter.begin()``.
+Sets the rain detection state.
 
 .. code-block:: arduino
 
@@ -120,7 +114,7 @@ Example:
 Assignment operator
 ^^^^^^^^^^^^^^^^^^^
 
-Sets the rain detection state. Same as ``setRain()``; call after ``Matter.begin()``.
+Sets the rain detection state.
 
 .. code-block:: arduino
 

@@ -153,7 +153,6 @@ String HTTPUpdate::getLastErrorString(void) {
     case HTTP_UE_BIN_VERIFY_HEADER_FAILED: return "Verify Bin Header Failed";
     case HTTP_UE_BIN_FOR_WRONG_FLASH:      return "New Binary Does Not Fit Flash Size";
     case HTTP_UE_NO_PARTITION:             return "Partition Could Not be Found";
-    case HTTP_UE_SERVER_FAULTY_SHA256:     return "Wrong SHA256";
   }
 
   return String();
@@ -194,18 +193,6 @@ String getSketchSHA256() {
 HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &currentVersion, uint8_t type, HTTPUpdateRequestCB requestCB) {
 
   HTTPUpdateResult ret = HTTP_UPDATE_FAILED;
-
-  // Prefetch checksum sidecars before the firmware GET when an explicit digest is
-  // not already set. Response headers can still override a successful prefetch.
-  String md5;
-  String sha256;
-  uint8_t sidecarFailures = 0;
-  if (_checksumSidecarFetch) {
-    uint8_t requested =
-      (!_md5SumUrl.isEmpty() && _md5Sum.isEmpty() ? SIDECAR_MD5_FAILED : 0) | (!_sha256SumUrl.isEmpty() && _sha256Sum.isEmpty() ? SIDECAR_SHA256_FAILED : 0);
-    sidecarFailures =
-      _checksumSidecarFetch(http.getClient(), _md5SumUrl, _sha256SumUrl, requested, md5, sha256, _httpClientTimeout, _followRedirects, http.getRedirectLimit());
-  }
 
   // use HTTP/1.0 for update since the update handler not support any transfer Encoding
   http.useHTTP10(true);
@@ -259,7 +246,7 @@ HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &curren
     http.setAuthorization(_auth.c_str());
   }
 
-  const char *headerkeys[] = {"x-MD5", "x-SHA256"};
+  const char *headerkeys[] = {"x-MD5"};
   size_t headerkeyssize = sizeof(headerkeys) / sizeof(char *);
 
   // track these headers
@@ -280,36 +267,19 @@ HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &curren
   log_d(" - code: %d\n", code);
   log_d(" - len: %d\n", len);
 
-  // Precedence: setMD5sum()/setSHA256sum() > response header > sidecar URL
+  String md5;
   if (_md5Sum.length()) {
     md5 = _md5Sum;
   } else if (http.hasHeader("x-MD5")) {
     md5 = http.header("x-MD5");
-  } else if ((sidecarFailures & SIDECAR_MD5_FAILED) && code == HTTP_CODE_OK && len > 0) {
-    _lastError = HTTP_UE_SERVER_FAULTY_MD5;
-    http.end();
-    return HTTP_UPDATE_FAILED;
   }
   if (md5.length()) {
     log_d(" - MD5: %s\n", md5.c_str());
   }
 
-  if (_sha256Sum.length()) {
-    sha256 = _sha256Sum;
-  } else if (http.hasHeader("x-SHA256")) {
-    sha256 = http.header("x-SHA256");
-  } else if ((sidecarFailures & SIDECAR_SHA256_FAILED) && code == HTTP_CODE_OK && len > 0) {
-    _lastError = HTTP_UE_SERVER_FAULTY_SHA256;
-    http.end();
-    return HTTP_UPDATE_FAILED;
-  }
-  if (sha256.length()) {
-    log_d(" - SHA256: %s\n", sha256.c_str());
-  }
-
   log_d("ESP32 info:\n");
-  log_d(" - free Space: %" PRIu32 "\n", ESP.getFreeSketchSpace());
-  log_d(" - current Sketch Size: %" PRIu32 "\n", ESP.getSketchSize());
+  log_d(" - free Space: %d\n", ESP.getFreeSketchSpace());
+  log_d(" - current Sketch Size: %d\n", ESP.getSketchSize());
 
   if (currentVersion && currentVersion[0] != 0x00) {
     log_d(" - current version: %s\n", currentVersion.c_str());
@@ -343,7 +313,7 @@ HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &curren
           }
 
           if (len > _partition->size) {
-            log_e("spiffsSize to low (%" PRIu32 ") needed: %" PRIu32 "\n", _partition->size, len);
+            log_e("spiffsSize to low (%d) needed: %d\n", _partition->size, len);
             startUpdate = false;
           }
         } else {
@@ -414,7 +384,7 @@ HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &curren
                     }
 */
           }
-          if (runUpdate(*tcp, len, md5, command, sha256)) {
+          if (runUpdate(*tcp, len, md5, command)) {
             ret = HTTP_UPDATE_OK;
             log_d("Update ok\n");
             http.end();
@@ -467,11 +437,9 @@ HTTPUpdateResult HTTPUpdate::handleUpdate(HTTPClient &http, const String &curren
  * @param in Stream&
  * @param size uint32_t
  * @param md5 String
- * @param command int
- * @param sha256 String
  * @return true if Update ok
  */
-bool HTTPUpdate::runUpdate(Stream &in, uint32_t size, String md5, int command, String sha256) {
+bool HTTPUpdate::runUpdate(Stream &in, uint32_t size, String md5, int command) {
   if (!_updater) {
     return false;
   }
@@ -498,26 +466,17 @@ bool HTTPUpdate::runUpdate(Stream &in, uint32_t size, String md5, int command, S
     if (!_updater->setMD5(md5.c_str())) {
       _lastError = HTTP_UE_SERVER_FAULTY_MD5;
       log_e("Update.setMD5 failed! (%s)\n", md5.c_str());
-      _updater->abort();
       return false;
     }
   }
 
-  if (sha256.length()) {
-    if (!_updater->setSHA256(sha256.c_str())) {
-      _lastError = HTTP_UE_SERVER_FAULTY_SHA256;
-      log_e("Update.setSHA256 failed! (%s)\n", sha256.c_str());
-      _updater->abort();
-      return false;
-    }
-  }
+  // To do: the SHA256 could be checked if the server sends it
 
   if (_updater->writeStream(in) != size) {
     _lastError = _updater->getError();
     _updater->printError(error);
     error.trim();  // remove line ending
     log_e("Update.writeStream failed! (%s)\n", error.c_str());
-    _updater->abort();
     return false;
   }
 

@@ -43,21 +43,15 @@ Initialization
 begin
 ^^^^^
 
-Initializes the Matter contact sensor endpoint. Fabric ``StateValue`` starts ``false`` (open). Call ``setContact()`` after ``Matter.begin()`` with the real sensor reading.
+Initializes the Matter contact sensor endpoint with an initial contact state.
 
 .. code-block:: arduino
 
-    bool begin();
+    bool begin(bool _contactState = false);
+
+* ``_contactState`` - Initial contact state (``true`` = closed, ``false`` = open, default: ``false``)
 
 This function will return ``true`` if successful, ``false`` otherwise.
-
-Typical usage:
-
-.. code-block:: arduino
-
-    ContactSensor.begin();
-    Matter.begin();
-    ContactSensor.setContact(digitalRead(contactPin));
 
 end
 ^^^
@@ -74,7 +68,7 @@ Contact State Control
 setContact
 ^^^^^^^^^^
 
-Sets the contact state. Call after ``Matter.begin()``.
+Sets the contact state.
 
 .. code-block:: arduino
 
@@ -120,7 +114,7 @@ Example:
 Assignment operator
 ^^^^^^^^^^^^^^^^^^^
 
-Sets the contact state. Same as ``setContact()``; call after ``Matter.begin()``.
+Sets the contact state.
 
 .. code-block:: arduino
 

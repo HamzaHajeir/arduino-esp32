@@ -1,4 +1,4 @@
-// Copyright 2026 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2025 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,13 +22,6 @@
 #include "platform/ESP32/OpenthreadLauncher.h"
 #endif
 
-// This prevents initArduino() from releasing BLE memory before the
-// Matter stack can use Bluetooth transport.
-#if CONFIG_ENABLE_CHIPOBLE
-#include "esp32-hal-alloc-ble-mem.h"
-#include "esp32-hal-bt.h"
-#endif
-
 using namespace esp_matter;
 using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
@@ -37,15 +30,7 @@ using namespace chip::app::Clusters;
 
 constexpr auto k_timeout_seconds = 300;
 
-// Two-phase lifecycle. Endpoint begin() creates the node (NodeCreated).
-// Matter.begin() starts the CHIP stack (StackStarted). These are not the same:
-// identity setters are valid after the node exists and invalid after the stack starts.
-enum class MatterLifecycle : uint8_t {
-  Uninitialized,
-  NodeCreated,
-  StackStarted
-};
-static MatterLifecycle sLifecycle = MatterLifecycle::Uninitialized;
+static bool _matter_has_started = false;
 static node::config_t node_config;
 static node_t *deviceNode = nullptr;
 ArduinoMatter::matterEventCB ArduinoMatter::_matterEventCB = nullptr;
@@ -56,10 +41,7 @@ ArduinoMatter::matterEventCB ArduinoMatter::_matterEventCB = nullptr;
 static esp_err_t app_attribute_update_cb(
   attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data
 ) {
-  log_d(
-    "Attribute update callback: type: %u, endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %u", type, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Attribute update callback: type: %u, endpoint: %u, cluster: %u, attribute: %u, val: %u", type, endpoint_id, cluster_id, attribute_id, val->val.u32);
   esp_err_t err = ESP_OK;
   MatterEndPoint *ep = (MatterEndPoint *)priv_data;  // endpoint pointer to base class
   switch (type) {
@@ -86,7 +68,7 @@ static esp_err_t app_attribute_update_cb(
 // This callback is invoked when clients interact with the Identify Cluster.
 // In the callback implementation, an endpoint can identify itself. (e.g., by flashing an LED or light).
 static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id, uint8_t effect_variant, void *priv_data) {
-  log_d("Identification callback to endpoint %u: type: %u, effect: %u, variant: %u", endpoint_id, type, effect_id, effect_variant);
+  log_d("Identification callback to endpoint %d: type: %u, effect: %u, variant: %u", endpoint_id, type, effect_id, effect_variant);
   esp_err_t err = ESP_OK;
   MatterEndPoint *ep = (MatterEndPoint *)priv_data;  // endpoint pointer to base class
   // Identify the endpoint sending a counter to the application
@@ -151,12 +133,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
   }
 }
 
-bool ArduinoMatter::isStackStarted() {
-  return sLifecycle == MatterLifecycle::StackStarted;
-}
-
 void ArduinoMatter::_init() {
-  if (sLifecycle != MatterLifecycle::Uninitialized) {
+  if (_matter_has_started) {
     return;
   }
 
@@ -168,24 +146,14 @@ void ArduinoMatter::_init() {
     return;
   }
 
-  sLifecycle = MatterLifecycle::NodeCreated;
+  _matter_has_started = true;
 }
 
 void ArduinoMatter::begin() {
-  if (sLifecycle == MatterLifecycle::StackStarted) {
-    return;
-  }
-  if (sLifecycle != MatterLifecycle::NodeCreated) {
+  if (!_matter_has_started) {
     log_e("No Matter endpoint has been created. Please create an endpoint first.");
     return;
   }
-
-#if defined(CONFIG_BT_CONTROLLER_ENABLED)
-  if (isBLECommissioningEnabled() && btMemReleased(BT_MODE_BLE)) {
-    log_e("BLE memory has been released. BLE commissioning is not available.");
-    return;
-  }
-#endif
 
 #if CONFIG_ENABLE_MATTER_OVER_THREAD
   // Set OpenThread platform config
@@ -199,16 +167,12 @@ void ArduinoMatter::begin() {
   set_openthread_platform_config(&config);
 #endif
 
-  applyIdentityBeforeStart();
-
   /* Matter start */
   esp_err_t err = esp_matter::start(app_event_cb);
   if (err != ESP_OK) {
     log_e("Failed to start Matter, err:%d", err);
-    return;
+    _matter_has_started = false;
   }
-  sLifecycle = MatterLifecycle::StackStarted;
-  applyIdentityAfterStart();
 }
 
 // Network and Commissioning Capability Queries

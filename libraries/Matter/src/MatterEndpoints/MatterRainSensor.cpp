@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterRainSensor.h>
 
 using namespace esp_matter;
@@ -29,10 +30,7 @@ bool MatterRainSensor::attributeChangeCB(uint16_t endpoint_id, uint32_t cluster_
     return false;
   }
 
-  log_d(
-    "Rain Sensor Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Rain Sensor Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
   return ret;
 }
 
@@ -42,28 +40,26 @@ MatterRainSensor::~MatterRainSensor() {
   end();
 }
 
-bool MatterRainSensor::begin() {
+bool MatterRainSensor::begin(bool _rainState) {
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Matter Rain Sensor with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Rain Sensor with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
-  rain_sensor::config_t rain_sensor_config{};
-  rain_sensor_config.boolean_state.state_value = false;
-  // CHIP BooleanStateCluster still starts at false regardless of this field;
-  // apply the real sensor with setRain() after Matter.begin().
+  rain_sensor::config_t rain_sensor_config;
+  rain_sensor_config.boolean_state.state_value = _rainState;
 
+  // endpoint handles can be used to add/modify clusters.
   endpoint_t *endpoint = rain_sensor::create(node::get(), &rain_sensor_config, ENDPOINT_FLAG_NONE, (void *)this);
   if (endpoint == nullptr) {
     log_e("Failed to create Rain Sensor endpoint");
     return false;
   }
-  rainState = false;
+  rainState = _rainState;
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Rain Sensor created with endpoint_id %u", getEndPointId());
+  log_i("Rain Sensor created with endpoint_id %d", getEndPointId());
 
   started = true;
   return true;
@@ -79,15 +75,27 @@ bool MatterRainSensor::setRain(bool _rainState) {
     return false;
   }
 
+  // avoid processing if there was no change
   if (rainState == _rainState) {
     return true;
   }
 
-  if (!setBooleanStateValue(_rainState)) {
-    log_e("Failed to update Rain Sensor Attribute.");
+  esp_matter_attr_val_t rainVal = esp_matter_invalid(NULL);
+
+  if (!getAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &rainVal)) {
+    log_e("Failed to get Rain Sensor Attribute.");
     return false;
   }
-  rainState = _rainState;
+  if (rainVal.val.u8 != _rainState) {
+    rainVal.val.u8 = _rainState;
+    bool ret;
+    ret = updateAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &rainVal);
+    if (!ret) {
+      log_e("Failed to update Rain Sensor Attribute.");
+      return false;
+    }
+    rainState = _rainState;
+  }
   log_v("Rain Sensor set to %s", _rainState ? "Detected" : "Not Detected");
 
   return true;
