@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterDimmableLight.h>
 
 using namespace esp_matter;
@@ -29,16 +30,13 @@ bool MatterDimmableLight::attributeChangeCB(uint16_t endpoint_id, uint32_t clust
     return false;
   }
 
-  log_d(
-    "Dimmable Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Dimmable Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
 
   if (endpoint_id == getEndPointId()) {
     switch (cluster_id) {
       case OnOff::Id:
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-          log_d("DimmableLight On/Off State changed to %u", val->val.b);
+          log_d("DimmableLight On/Off State changed to %d", val->val.b);
           if (_onChangeOnOffCB != NULL) {
             ret &= _onChangeOnOffCB(val->val.b);
           }
@@ -52,7 +50,7 @@ bool MatterDimmableLight::attributeChangeCB(uint16_t endpoint_id, uint32_t clust
         break;
       case LevelControl::Id:
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-          log_d("DimmableLight Brightness changed to %u", val->val.u8);
+          log_d("DimmableLight Brightness changed to %d", val->val.u8);
           if (_onChangeBrightnessCB != NULL) {
             ret &= _onChangeBrightnessCB(val->val.u8);
           }
@@ -78,17 +76,17 @@ MatterDimmableLight::~MatterDimmableLight() {
 bool MatterDimmableLight::begin(bool initialState, uint8_t brightness) {
   ArduinoMatter::_init();
   if (getEndPointId() != 0) {
-    log_e("Matter Dimmable Light with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Dimmable Light with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
   dimmable_light::config_t light_config;
   light_config.on_off.on_off = initialState;
-  light_config.on_off_lighting.start_up_on_off = nullptr;
+  light_config.on_off.lighting.start_up_on_off = nullptr;
   onOffState = initialState;
 
   light_config.level_control.current_level = brightness;
-  light_config.level_control_lighting.start_up_current_level = nullptr;
+  light_config.level_control.lighting.start_up_current_level = nullptr;
   brightnessLevel = brightness;
 
   // endpoint handles can be used to add/modify clusters.
@@ -99,8 +97,7 @@ bool MatterDimmableLight::begin(bool initialState, uint8_t brightness) {
   }
 
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Dimmable Light created with endpoint_id %u", getEndPointId());
+  log_i("Dimmable Light created with endpoint_id %d", getEndPointId());
 
   /* Mark deferred persistence for some attributes that might be changed rapidly */
   cluster_t *level_control_cluster = cluster::get(endpoint, LevelControl::Id);

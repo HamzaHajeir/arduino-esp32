@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterColorTemperatureLight.h>
 
 using namespace esp_matter;
@@ -29,16 +30,13 @@ bool MatterColorTemperatureLight::attributeChangeCB(uint16_t endpoint_id, uint32
     return false;
   }
 
-  log_d(
-    "Temperature Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Temperature Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
 
   if (endpoint_id == getEndPointId()) {
     switch (cluster_id) {
       case OnOff::Id:
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-          log_d("Temperature Light On/Off State changed to %u", val->val.b);
+          log_d("Temperature Light On/Off State changed to %d", val->val.b);
           if (_onChangeOnOffCB != NULL) {
             ret &= _onChangeOnOffCB(val->val.b);
           }
@@ -52,7 +50,7 @@ bool MatterColorTemperatureLight::attributeChangeCB(uint16_t endpoint_id, uint32
         break;
       case LevelControl::Id:
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-          log_d("Temperature Light Brightness changed to %u", val->val.u8);
+          log_d("Temperature Light Brightness changed to %d", val->val.u8);
           if (_onChangeBrightnessCB != NULL) {
             ret &= _onChangeBrightnessCB(val->val.u8);
           }
@@ -66,7 +64,7 @@ bool MatterColorTemperatureLight::attributeChangeCB(uint16_t endpoint_id, uint32
         break;
       case ColorControl::Id:
         if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
-          log_d("Temperature Light Temperature changed to %u", val->val.u16);
+          log_d("Temperature Light Temperature changed to %d", val->val.u16);
           if (_onChangeTemperatureCB != NULL) {
             ret &= _onChangeTemperatureCB(val->val.u16);
           }
@@ -93,23 +91,23 @@ bool MatterColorTemperatureLight::begin(bool initialState, uint8_t brightness, u
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Matter Temperature Light with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Temperature Light with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
   color_temperature_light::config_t light_config;
   light_config.on_off.on_off = initialState;
-  light_config.on_off_lighting.start_up_on_off = nullptr;
+  light_config.on_off.lighting.start_up_on_off = nullptr;
   onOffState = initialState;
 
   light_config.level_control.current_level = brightness;
-  light_config.level_control_lighting.start_up_current_level = nullptr;
+  light_config.level_control.lighting.start_up_current_level = nullptr;
   brightnessLevel = brightness;
 
   light_config.color_control.color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
   light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
-  light_config.color_control_color_temperature.color_temperature_mireds = ColorTemperature;
-  light_config.color_control_color_temperature.start_up_color_temperature_mireds = nullptr;
+  light_config.color_control.color_temperature.color_temperature_mireds = ColorTemperature;
+  light_config.color_control.color_temperature.startup_color_temperature_mireds = nullptr;
   colorTemperatureLevel = ColorTemperature;
 
   // endpoint handles can be used to add/modify clusters.
@@ -120,8 +118,7 @@ bool MatterColorTemperatureLight::begin(bool initialState, uint8_t brightness, u
   }
 
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Temperature Light created with endpoint_id %u", getEndPointId());
+  log_i("Temperature Light created with endpoint_id %d", getEndPointId());
 
   /* Mark deferred persistence for some attributes that might be changed rapidly */
   cluster_t *level_control_cluster = cluster::get(endpoint, LevelControl::Id);

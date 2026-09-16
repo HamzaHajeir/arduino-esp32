@@ -170,6 +170,8 @@ void adc_oneshot_test(void) {
   setup_test("ADC_Oneshot", ADC1_DEFAULT, ADC2_DEFAULT);
   test_executed = true;
   analogReadResolution(12);
+  pinMode(ADC1_DEFAULT, INPUT);
+  pinMode(ADC2_DEFAULT, INPUT);
   analogRead(ADC1_DEFAULT);
   analogRead(ADC2_DEFAULT);
 #endif
@@ -479,7 +481,6 @@ void setup() {
   }
   Serial1.onReceive(onReceive_cb);
   uart_internal_loopback(1, uart1_rx_pin);
-  delay(1000);
 
   gpio_test();
   sigmadelta_test();

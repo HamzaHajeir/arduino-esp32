@@ -17,6 +17,7 @@
 
 #include <string.h>
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterTemperatureControlledCabinet.h>
 #include <esp_matter_attribute.h>
 
@@ -25,6 +26,52 @@ using namespace esp_matter::endpoint;
 using namespace esp_matter::cluster;
 using namespace chip::app::Clusters;
 
+// Custom endpoint for temperature_level_controlled_cabinet device
+// This endpoint uses temperature_level feature instead of temperature_number
+namespace esp_matter {
+using namespace cluster;
+namespace endpoint {
+namespace temperature_level_controlled_cabinet {
+typedef struct config {
+  cluster::descriptor::config_t descriptor;
+  cluster::temperature_control::config_t temperature_control;
+} config_t;
+
+uint32_t get_device_type_id() {
+  return ESP_MATTER_TEMPERATURE_CONTROLLED_CABINET_DEVICE_TYPE_ID;
+}
+
+uint8_t get_device_type_version() {
+  return ESP_MATTER_TEMPERATURE_CONTROLLED_CABINET_DEVICE_TYPE_VERSION;
+}
+
+esp_err_t add(endpoint_t *endpoint, config_t *config) {
+  if (!endpoint) {
+    log_e("Endpoint cannot be NULL");
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = add_device_type(endpoint, get_device_type_id(), get_device_type_version());
+  if (err != ESP_OK) {
+    log_e("Failed to add device type id:%" PRIu32 ",err: %d", get_device_type_id(), err);
+    return err;
+  }
+
+  // Create temperature_control cluster with temperature_level feature
+  // Note: temperature_number and temperature_level are mutually exclusive
+  temperature_control::create(endpoint, &(config->temperature_control), CLUSTER_FLAG_SERVER, temperature_control::feature::temperature_level::get_id());
+
+  return ESP_OK;
+}
+
+endpoint_t *create(node_t *node, config_t *config, uint8_t flags, void *priv_data) {
+  endpoint_t *endpoint = endpoint::create(node, flags, priv_data);
+  add(endpoint, config);
+  return endpoint;
+}
+}  // namespace temperature_level_controlled_cabinet
+}  // namespace endpoint
+}  // namespace esp_matter
+
 bool MatterTemperatureControlledCabinet::attributeChangeCB(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, esp_matter_attr_val_t *val) {
   bool ret = true;
   if (!started) {
@@ -32,7 +79,7 @@ bool MatterTemperatureControlledCabinet::attributeChangeCB(uint16_t endpoint_id,
     return false;
   }
 
-  log_d("Temperature Controlled Cabinet Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32, endpoint_id, cluster_id, attribute_id);
+  log_d("Temperature Controlled Cabinet Attr update callback: endpoint: %u, cluster: %u, attribute: %u", endpoint_id, cluster_id, attribute_id);
 
   // Handle TemperatureControl cluster attribute changes from Matter controller
   if (cluster_id == TemperatureControl::Id) {
@@ -88,7 +135,7 @@ bool MatterTemperatureControlledCabinet::attributeChangeCB(uint16_t endpoint_id,
         log_w("SupportedTemperatureLevels change attempted - this attribute is read-only");
         break;
 
-      default: log_d("Unhandled TemperatureControl Attribute ID: %" PRIu32, attribute_id); break;
+      default: log_d("Unhandled TemperatureControl Attribute ID: %u", attribute_id); break;
     }
   }
 
@@ -113,7 +160,7 @@ bool MatterTemperatureControlledCabinet::begin(int16_t _rawTempSetpoint, int16_t
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Temperature Controlled Cabinet with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Temperature Controlled Cabinet with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
@@ -123,21 +170,21 @@ bool MatterTemperatureControlledCabinet::begin(int16_t _rawTempSetpoint, int16_t
   // No need to manually set attributes here as they are already created with the config values
 
   temperature_controlled_cabinet::config_t cabinet_config;
-  cabinet_config.temperature_control.features.temperature_number.temp_setpoint = _rawTempSetpoint;
-  cabinet_config.temperature_control.features.temperature_number.min_temperature = _rawMinTemperature;
-  cabinet_config.temperature_control.features.temperature_number.max_temperature = _rawMaxTemperature;
-  cabinet_config.temperature_control.features.temperature_step.step = _rawStep;
-  cabinet_config.temperature_control.features.temperature_level.selected_temp_level = 0;
+  cabinet_config.temperature_control.temperature_number.temp_setpoint = _rawTempSetpoint;
+  cabinet_config.temperature_control.temperature_number.min_temperature = _rawMinTemperature;
+  cabinet_config.temperature_control.temperature_number.max_temperature = _rawMaxTemperature;
+  cabinet_config.temperature_control.temperature_step.step = _rawStep;
+  cabinet_config.temperature_control.temperature_level.selected_temp_level = 0;
 
   // Enable temperature_number feature (required)
   // Note: temperature_number and temperature_level are mutually exclusive.
   // Only one of them can be enabled at a time.
-  cabinet_config.temperature_control.feature_flags = temperature_control::feature::temperature_number::get_id();
+  cabinet_config.temperature_control.features = temperature_control::feature::temperature_number::get_id();
 
   // Always enable temperature_step feature to allow setStep() to be called later
   // Note: temperature_step requires temperature_number feature (which is always enabled for this mode)
   // The step value can be set initially via begin() or later via setStep()
-  cabinet_config.temperature_control.feature_flags |= temperature_control::feature::temperature_step::get_id();
+  cabinet_config.temperature_control.features |= temperature_control::feature::temperature_step::get_id();
 
   // endpoint handles can be used to add/modify clusters
   endpoint_t *endpoint = temperature_controlled_cabinet::create(node::get(), &cabinet_config, ENDPOINT_FLAG_NONE, (void *)this);
@@ -154,8 +201,7 @@ bool MatterTemperatureControlledCabinet::begin(int16_t _rawTempSetpoint, int16_t
   useTemperatureNumber = true;  // Set feature mode to temperature_number
 
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Temperature Controlled Cabinet created with temperature_number feature, endpoint_id %u", getEndPointId());
+  log_i("Temperature Controlled Cabinet created with temperature_number feature, endpoint_id %d", getEndPointId());
 
   // Workaround: Manually create Step attribute if it wasn't created automatically
   // This handles the case where temperature_step::add() fails due to feature map timing issue
@@ -219,26 +265,26 @@ bool MatterTemperatureControlledCabinet::beginInternal(uint8_t *supportedLevels,
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Temperature Controlled Cabinet with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Temperature Controlled Cabinet with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
-  // Use official temperature_controlled_cabinet endpoint with temperature_level feature
-  temperature_controlled_cabinet::config_t cabinet_config;
+  // Use custom temperature_level_controlled_cabinet endpoint that supports temperature_level feature
+  temperature_level_controlled_cabinet::config_t cabinet_config;
   // Initialize temperature_number config (not used but required for struct)
-  cabinet_config.temperature_control.features.temperature_number.temp_setpoint = 0;
-  cabinet_config.temperature_control.features.temperature_number.min_temperature = 0;
-  cabinet_config.temperature_control.features.temperature_number.max_temperature = 0;
-  cabinet_config.temperature_control.features.temperature_step.step = 0;
-  cabinet_config.temperature_control.features.temperature_level.selected_temp_level = selectedLevel;
+  cabinet_config.temperature_control.temperature_number.temp_setpoint = 0;
+  cabinet_config.temperature_control.temperature_number.min_temperature = 0;
+  cabinet_config.temperature_control.temperature_number.max_temperature = 0;
+  cabinet_config.temperature_control.temperature_step.step = 0;
+  cabinet_config.temperature_control.temperature_level.selected_temp_level = selectedLevel;
 
   // Enable temperature_level feature
   // Note: temperature_number and temperature_level are mutually exclusive.
   // Only one of them can be enabled at a time.
-  cabinet_config.temperature_control.feature_flags = temperature_control::feature::temperature_level::get_id();
+  cabinet_config.temperature_control.features = temperature_control::feature::temperature_level::get_id();
 
   // endpoint handles can be used to add/modify clusters
-  endpoint_t *endpoint = temperature_controlled_cabinet::create(node::get(), &cabinet_config, ENDPOINT_FLAG_NONE, (void *)this);
+  endpoint_t *endpoint = temperature_level_controlled_cabinet::create(node::get(), &cabinet_config, ENDPOINT_FLAG_NONE, (void *)this);
   if (endpoint == nullptr) {
     log_e("Failed to create Temperature Level Controlled Cabinet endpoint");
     return false;
@@ -257,8 +303,7 @@ bool MatterTemperatureControlledCabinet::beginInternal(uint8_t *supportedLevels,
   rawStep = 0;
 
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Temperature Level Controlled Cabinet created with temperature_level feature, endpoint_id %u", getEndPointId());
+  log_i("Temperature Level Controlled Cabinet created with temperature_level feature, endpoint_id %d", getEndPointId());
 
   // Set started flag before calling setter methods (they check for started)
   started = true;
@@ -319,10 +364,8 @@ bool MatterTemperatureControlledCabinet::setRawTemperatureSetpoint(int16_t _rawT
   }
   if (tempVal.val.i16 != _rawTemperature) {
     tempVal.val.i16 = _rawTemperature;
-    bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::TemperatureSetpoint::Id, &tempVal);
-    if (!ret) {
-      ret = setAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::TemperatureSetpoint::Id, &tempVal);
-    }
+    bool ret;
+    ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::TemperatureSetpoint::Id, &tempVal);
     if (!ret) {
       log_e("Failed to update Temperature Controlled Cabinet Temperature Setpoint Attribute.");
       return false;
@@ -345,6 +388,10 @@ double MatterTemperatureControlledCabinet::getTemperatureSetpoint() {
     return 0.0;
   }
 
+  esp_matter_attr_val_t tempVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::TemperatureSetpoint::Id, &tempVal)) {
+    rawTempSetpoint = tempVal.val.i16;
+  }
   return (double)rawTempSetpoint / 100.0;
 }
 
@@ -370,10 +417,8 @@ bool MatterTemperatureControlledCabinet::setRawMinTemperature(int16_t _rawTemper
   }
   if (tempVal.val.i16 != _rawTemperature) {
     tempVal.val.i16 = _rawTemperature;
-    bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MinTemperature::Id, &tempVal);
-    if (!ret) {
-      ret = setAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MinTemperature::Id, &tempVal);
-    }
+    bool ret;
+    ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MinTemperature::Id, &tempVal);
     if (!ret) {
       log_e("Failed to update Temperature Controlled Cabinet Min Temperature Attribute.");
       return false;
@@ -396,6 +441,10 @@ double MatterTemperatureControlledCabinet::getMinTemperature() {
     return 0.0;
   }
 
+  esp_matter_attr_val_t tempVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MinTemperature::Id, &tempVal)) {
+    rawMinTemperature = tempVal.val.i16;
+  }
   return (double)rawMinTemperature / 100.0;
 }
 
@@ -421,10 +470,8 @@ bool MatterTemperatureControlledCabinet::setRawMaxTemperature(int16_t _rawTemper
   }
   if (tempVal.val.i16 != _rawTemperature) {
     tempVal.val.i16 = _rawTemperature;
-    bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MaxTemperature::Id, &tempVal);
-    if (!ret) {
-      ret = setAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MaxTemperature::Id, &tempVal);
-    }
+    bool ret;
+    ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MaxTemperature::Id, &tempVal);
     if (!ret) {
       log_e("Failed to update Temperature Controlled Cabinet Max Temperature Attribute.");
       return false;
@@ -447,6 +494,10 @@ double MatterTemperatureControlledCabinet::getMaxTemperature() {
     return 0.0;
   }
 
+  esp_matter_attr_val_t tempVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::MaxTemperature::Id, &tempVal)) {
+    rawMaxTemperature = tempVal.val.i16;
+  }
   return (double)rawMaxTemperature / 100.0;
 }
 
@@ -472,10 +523,8 @@ bool MatterTemperatureControlledCabinet::setRawStep(int16_t _rawStep) {
   }
   if (stepVal.val.i16 != _rawStep) {
     stepVal.val.i16 = _rawStep;
-    bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::Step::Id, &stepVal);
-    if (!ret) {
-      ret = setAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::Step::Id, &stepVal);
-    }
+    bool ret;
+    ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::Step::Id, &stepVal);
     if (!ret) {
       log_e("Failed to update Temperature Controlled Cabinet Step Attribute.");
       return false;
@@ -498,6 +547,12 @@ double MatterTemperatureControlledCabinet::getStep() {
     return 0.0;
   }
 
+  // Read from attribute (should always exist after begin() due to workaround)
+  // If read fails, use stored rawStep value from begin()
+  esp_matter_attr_val_t stepVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::Step::Id, &stepVal)) {
+    rawStep = stepVal.val.i16;
+  }
   return (double)rawStep / 100.0;
 }
 
@@ -535,10 +590,8 @@ bool MatterTemperatureControlledCabinet::setSelectedTemperatureLevel(uint8_t lev
   }
   if (levelVal.val.u8 != level) {
     levelVal.val.u8 = level;
-    bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SelectedTemperatureLevel::Id, &levelVal);
-    if (!ret) {
-      ret = setAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SelectedTemperatureLevel::Id, &levelVal);
-    }
+    bool ret;
+    ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SelectedTemperatureLevel::Id, &levelVal);
     if (!ret) {
       log_e("Failed to update Temperature Controlled Cabinet Selected Temperature Level Attribute.");
       return false;
@@ -556,6 +609,10 @@ uint8_t MatterTemperatureControlledCabinet::getSelectedTemperatureLevel() {
     return 0;
   }
 
+  esp_matter_attr_val_t levelVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SelectedTemperatureLevel::Id, &levelVal)) {
+    selectedTempLevel = levelVal.val.u8;
+  }
   return selectedTempLevel;
 }
 
@@ -581,21 +638,19 @@ bool MatterTemperatureControlledCabinet::setSupportedTemperatureLevels(uint8_t *
     return false;
   }
 
-  // Use caller's buffer directly for the attribute update — the pointer is read
-  // synchronously by updateAttributeVal, so the caller's buffer is safe to use here.
-  // Use esp_matter_array helper function which properly initializes the structure.
-  esp_matter_attr_val_t levelsVal = esp_matter_array(levels, sizeof(uint8_t), count);
+  // Copy the array into internal buffer
+  memcpy(supportedLevelsArray, levels, count * sizeof(uint8_t));
+  supportedLevelsCount = count;
+
+  // Use internal copy for Matter attribute update
+  // Use esp_matter_array helper function which properly initializes the structure
+  esp_matter_attr_val_t levelsVal = esp_matter_array(supportedLevelsArray, sizeof(uint8_t), count);
 
   bool ret = updateAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SupportedTemperatureLevels::Id, &levelsVal);
   if (!ret) {
     log_e("Failed to update Temperature Controlled Cabinet Supported Temperature Levels Attribute.");
     return false;
   }
-
-  // Copy into internal buffer only after the attribute store update succeeds,
-  // so that on failure the internal state remains unchanged (Ember pattern).
-  memcpy(supportedLevelsArray, levels, count * sizeof(uint8_t));
-  supportedLevelsCount = count;
   log_v("Temperature Controlled Cabinet supported temperature levels updated, count: %u", count);
 
   return true;
@@ -607,7 +662,11 @@ uint16_t MatterTemperatureControlledCabinet::getSupportedTemperatureLevelsCount(
     return 0;
   }
 
-  return supportedLevelsCount;
+  esp_matter_attr_val_t levelsVal = esp_matter_invalid(NULL);
+  if (getAttributeVal(TemperatureControl::Id, TemperatureControl::Attributes::SupportedTemperatureLevels::Id, &levelsVal)) {
+    return levelsVal.val.a.n;  // a.n is the count (number of elements)
+  }
+  return 0;
 }
 
 #endif /* CONFIG_ESP_MATTER_ENABLE_DATA_MODEL */

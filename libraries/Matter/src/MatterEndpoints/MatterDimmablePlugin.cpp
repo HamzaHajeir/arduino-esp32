@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterDimmablePlugin.h>
 
 using namespace esp_matter;
@@ -29,16 +30,13 @@ bool MatterDimmablePlugin::attributeChangeCB(uint16_t endpoint_id, uint32_t clus
     return false;
   }
 
-  log_d(
-    "DimmablePlugin Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("DimmablePlugin Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
 
   if (endpoint_id == getEndPointId()) {
     switch (cluster_id) {
       case OnOff::Id:
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-          log_d("DimmablePlugin On/Off State changed to %u", val->val.b);
+          log_d("DimmablePlugin On/Off State changed to %d", val->val.b);
           if (_onChangeOnOffCB != NULL) {
             ret &= _onChangeOnOffCB(val->val.b);
           }
@@ -52,7 +50,7 @@ bool MatterDimmablePlugin::attributeChangeCB(uint16_t endpoint_id, uint32_t clus
         break;
       case LevelControl::Id:
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-          log_d("DimmablePlugin Level changed to %u", val->val.u8);
+          log_d("DimmablePlugin Level changed to %d", val->val.u8);
           if (_onChangeLevelCB != NULL) {
             ret &= _onChangeLevelCB(val->val.u8);
           }
@@ -78,29 +76,28 @@ MatterDimmablePlugin::~MatterDimmablePlugin() {
 bool MatterDimmablePlugin::begin(bool initialState, uint8_t level) {
   ArduinoMatter::_init();
   if (getEndPointId() != 0) {
-    log_e("Matter Dimmable Plugin with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Dimmable Plugin with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
-  dimmable_plug_in_unit::config_t plugin_config;
+  dimmable_plugin_unit::config_t plugin_config;
   plugin_config.on_off.on_off = initialState;
-  plugin_config.on_off_lighting.start_up_on_off = nullptr;
+  plugin_config.on_off.lighting.start_up_on_off = nullptr;
   onOffState = initialState;
 
   plugin_config.level_control.current_level = level;
-  plugin_config.level_control_lighting.start_up_current_level = nullptr;
+  plugin_config.level_control.lighting.start_up_current_level = nullptr;
   this->level = level;
 
   // endpoint handles can be used to add/modify clusters.
-  endpoint_t *endpoint = dimmable_plug_in_unit::create(node::get(), &plugin_config, ENDPOINT_FLAG_NONE, (void *)this);
+  endpoint_t *endpoint = dimmable_plugin_unit::create(node::get(), &plugin_config, ENDPOINT_FLAG_NONE, (void *)this);
   if (endpoint == nullptr) {
     log_e("Failed to create dimmable plugin endpoint");
     return false;
   }
 
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Dimmable Plugin created with endpoint_id %u", getEndPointId());
+  log_i("Dimmable Plugin created with endpoint_id %d", getEndPointId());
 
   /* Mark deferred persistence for some attributes that might be changed rapidly */
   cluster_t *level_control_cluster = cluster::get(endpoint, LevelControl::Id);
