@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterWaterLeakDetector.h>
 
 using namespace esp_matter;
@@ -29,10 +30,7 @@ bool MatterWaterLeakDetector::attributeChangeCB(uint16_t endpoint_id, uint32_t c
     return false;
   }
 
-  log_d(
-    "Water Leak Detector Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id,
-    attribute_id, val->val.u32
-  );
+  log_d("Water Leak Detector Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
   return ret;
 }
 
@@ -42,28 +40,26 @@ MatterWaterLeakDetector::~MatterWaterLeakDetector() {
   end();
 }
 
-bool MatterWaterLeakDetector::begin() {
+bool MatterWaterLeakDetector::begin(bool _leakState) {
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Matter Water Leak Detector with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Water Leak Detector with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
-  water_leak_detector::config_t water_leak_detector_config{};
-  water_leak_detector_config.boolean_state.state_value = false;
-  // CHIP BooleanStateCluster still starts at false regardless of this field;
-  // apply the real sensor with setLeak() after Matter.begin().
+  water_leak_detector::config_t water_leak_detector_config;
+  water_leak_detector_config.boolean_state.state_value = _leakState;
 
+  // endpoint handles can be used to add/modify clusters.
   endpoint_t *endpoint = water_leak_detector::create(node::get(), &water_leak_detector_config, ENDPOINT_FLAG_NONE, (void *)this);
   if (endpoint == nullptr) {
     log_e("Failed to create Water Leak Detector endpoint");
     return false;
   }
-  leakState = false;
+  leakState = _leakState;
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Water Leak Detector created with endpoint_id %u", getEndPointId());
+  log_i("Water Leak Detector created with endpoint_id %d", getEndPointId());
 
   started = true;
   return true;
@@ -79,15 +75,27 @@ bool MatterWaterLeakDetector::setLeak(bool _leakState) {
     return false;
   }
 
+  // avoid processing if there was no change
   if (leakState == _leakState) {
     return true;
   }
 
-  if (!setBooleanStateValue(_leakState)) {
-    log_e("Failed to update Water Leak Detector Attribute.");
+  esp_matter_attr_val_t leakVal = esp_matter_invalid(NULL);
+
+  if (!getAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &leakVal)) {
+    log_e("Failed to get Water Leak Detector Attribute.");
     return false;
   }
-  leakState = _leakState;
+  if (leakVal.val.u8 != _leakState) {
+    leakVal.val.u8 = _leakState;
+    bool ret;
+    ret = updateAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &leakVal);
+    if (!ret) {
+      log_e("Failed to update Water Leak Detector Attribute.");
+      return false;
+    }
+    leakState = _leakState;
+  }
   log_v("Water Leak Detector set to %s", _leakState ? "Detected" : "Not Detected");
 
   return true;
