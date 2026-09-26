@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterContactSensor.h>
 
 using namespace esp_matter;
@@ -29,10 +30,7 @@ bool MatterContactSensor::attributeChangeCB(uint16_t endpoint_id, uint32_t clust
     return false;
   }
 
-  log_d(
-    "Contact Sensor Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Contact Sensor Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
   return ret;
 }
 
@@ -42,28 +40,26 @@ MatterContactSensor::~MatterContactSensor() {
   end();
 }
 
-bool MatterContactSensor::begin() {
+bool MatterContactSensor::begin(bool _contactState) {
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Matter Contact Sensor with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Contact Sensor with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
-  contact_sensor::config_t contact_sensor_config{};
-  contact_sensor_config.boolean_state.state_value = false;
-  // CHIP BooleanStateCluster still starts at false regardless of this field;
-  // apply the real sensor with setContact() after Matter.begin().
+  contact_sensor::config_t contact_sensor_config;
+  contact_sensor_config.boolean_state.state_value = _contactState;
 
+  // endpoint handles can be used to add/modify clusters.
   endpoint_t *endpoint = contact_sensor::create(node::get(), &contact_sensor_config, ENDPOINT_FLAG_NONE, (void *)this);
   if (endpoint == nullptr) {
     log_e("Failed to create Contact Sensor endpoint");
     return false;
   }
-  contactState = false;
+  contactState = _contactState;
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Contact Sensor created with endpoint_id %u", getEndPointId());
+  log_i("Contact Sensor created with endpoint_id %d", getEndPointId());
 
   started = true;
   return true;
@@ -79,15 +75,27 @@ bool MatterContactSensor::setContact(bool _contactState) {
     return false;
   }
 
+  // avoid processing if there was no change
   if (contactState == _contactState) {
     return true;
   }
 
-  if (!setBooleanStateValue(_contactState)) {
-    log_e("Failed to update Contact Sensor Attribute.");
+  esp_matter_attr_val_t contactVal = esp_matter_invalid(NULL);
+
+  if (!getAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &contactVal)) {
+    log_e("Failed to get Contact Sensor Attribute.");
     return false;
   }
-  contactState = _contactState;
+  if (contactVal.val.u8 != _contactState) {
+    contactVal.val.u8 = _contactState;
+    bool ret;
+    ret = updateAttributeVal(BooleanState::Id, BooleanState::Attributes::StateValue::Id, &contactVal);
+    if (!ret) {
+      log_e("Failed to update Contact Sensor Attribute.");
+      return false;
+    }
+    contactState = _contactState;
+  }
   log_v("Contact Sensor set to %s", _contactState ? "Closed" : "Open");
 
   return true;

@@ -16,6 +16,7 @@
 #ifdef CONFIG_ESP_MATTER_ENABLE_DATA_MODEL
 
 #include <Matter.h>
+#include <app/server/Server.h>
 #include <MatterEndpoints/MatterHumiditySensor.h>
 
 using namespace esp_matter;
@@ -29,10 +30,7 @@ bool MatterHumiditySensor::attributeChangeCB(uint16_t endpoint_id, uint32_t clus
     return false;
   }
 
-  log_d(
-    "Humidity Sensor Attr update callback: endpoint: %u, cluster: %" PRIu32 ", attribute: %" PRIu32 ", val: %" PRIu32, endpoint_id, cluster_id, attribute_id,
-    val->val.u32
-  );
+  log_d("Humidity Sensor Attr update callback: endpoint: %u, cluster: %u, attribute: %u, val: %u", endpoint_id, cluster_id, attribute_id, val->val.u32);
   return ret;
 }
 
@@ -46,7 +44,7 @@ bool MatterHumiditySensor::begin(uint16_t _rawHumidity) {
   ArduinoMatter::_init();
 
   if (getEndPointId() != 0) {
-    log_e("Matter Humidity Sensor with Endpoint Id %u device has already been created.", getEndPointId());
+    log_e("Matter Humidity Sensor with Endpoint Id %d device has already been created.", getEndPointId());
     return false;
   }
 
@@ -69,8 +67,7 @@ bool MatterHumiditySensor::begin(uint16_t _rawHumidity) {
   }
   rawHumidity = _rawHumidity;
   setEndPointId(endpoint::get_id(endpoint));
-
-  log_i("Humidity Sensor created with endpoint_id %u", getEndPointId());
+  log_i("Humidity Sensor created with endpoint_id %d", getEndPointId());
 
   started = true;
   return true;

@@ -2,8 +2,7 @@
    This Sketch demonstrates how to detect and set the baud rate when the UART0 is connected to
    some port that is sending data. It can be used with the Arduino IDE Serial Monitor to send the data.
 
-   Serial.begin(0) will start the baud rate detection. The result is rounded to the
-   nearest entry in uartDetectBaudrate()'s table (300 … 3686400).
+   Serial.begin(0) will start the baud rate detection. Valid range is 300 to 230400 baud.
    It will try to detect for 20 seconds, by default, while reading RX.
    This timeout of 20 seconds can be changed in the begin() function through <<timeout_ms>> parameter:
 
@@ -15,8 +14,6 @@
    In other other SoCs, it doesn't work.
 
 */
-
-#include <Arduino.h>
 
 // Open the Serial Monitor with testing baud start typing and sending characters
 void setup() {

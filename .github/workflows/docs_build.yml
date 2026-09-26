@@ -1,13 +1,13 @@
 name: Documentation Build and Deploy CI
 
 on:
-  push:
-    branches:
-      - master
-      - release/v2.x
-    paths:
-      - "docs/**"
-      - ".github/workflows/docs_build.yml"
+  # push:
+    # branches:
+    #   - master
+    #   - release/v2.x
+    # paths:
+    #   - "docs/**"
+    #   - ".github/workflows/docs_build.yml"
   pull_request:
     paths:
       - "docs/**"

@@ -9,11 +9,11 @@ The ``MatterColorTemperatureLight`` class provides a color temperature light end
 
 **Features:**
 * On/off control
-* Brightness level control (Arduino 0-255; Matter ``CurrentLevel`` is 1-254, and 255 is the nullable null sentinel)
-* Color temperature control (100-500 mireds; higher mireds are warmer)
+* Brightness level control (0-255)
+* Color temperature control (100-500 mireds)
 * State persistence support
 * Callback support for state, brightness, and temperature changes
-* Integration with Home Assistant, Apple Home, Amazon Alexa, and Google Home
+* Integration with Apple HomeKit, Amazon Alexa, and Google Home
 * Matter standard compliance
 
 **Use Cases:**
@@ -51,7 +51,7 @@ Initializes the Matter color temperature light endpoint with optional initial st
     bool begin(bool initialState = false, uint8_t brightness = 64, uint16_t colorTemperature = 370);
 
 * ``initialState`` - Initial on/off state (default: ``false`` = off)
-* ``brightness`` - Initial brightness level (0-255, default: 64 = 25%). ``0`` is stored as ``1``; ``255`` is stored as ``254``.
+* ``brightness`` - Initial brightness level (0-255, default: 64 = 25%)
 * ``colorTemperature`` - Initial color temperature in mireds (100-500, default: 370 = Soft White)
 
 This function will return ``true`` if successful, ``false`` otherwise.
@@ -71,7 +71,7 @@ Constants
 MAX_BRIGHTNESS
 ^^^^^^^^^^^^^^
 
-Arduino full-scale input (255). Matter stores this as ``254``.
+Maximum brightness value (255).
 
 .. code-block:: arduino
 
@@ -80,7 +80,7 @@ Arduino full-scale input (255). Matter stores this as ``254``.
 MAX_COLOR_TEMPERATURE
 ^^^^^^^^^^^^^^^^^^^^^
 
-Maximum color temperature value in mireds (500 mireds = warm white, about 2000 K).
+Maximum color temperature value (500 mireds = cool white).
 
 .. code-block:: arduino
 
@@ -89,7 +89,7 @@ Maximum color temperature value in mireds (500 mireds = warm white, about 2000 K
 MIN_COLOR_TEMPERATURE
 ^^^^^^^^^^^^^^^^^^^^^
 
-Minimum color temperature value in mireds (100 mireds = cool white, about 10000 K).
+Minimum color temperature value (100 mireds = warm white).
 
 .. code-block:: arduino
 
@@ -137,7 +137,7 @@ Sets the brightness level.
 
     bool setBrightness(uint8_t newBrightness);
 
-* ``newBrightness`` - Brightness (0-255). ``0`` clamps to ``1`` and ``255`` clamps to ``254``.
+* ``newBrightness`` - Brightness level (0-255)
 
 getBrightness
 ^^^^^^^^^^^^^
@@ -160,9 +160,9 @@ Sets the color temperature.
 
     bool setColorTemperature(uint16_t newTemperature);
 
-* ``newTemperature`` - Color temperature in mireds. Values outside 100-500 are clamped. ``ColorTempPhysicalMin/MaxMireds`` are advertised as 100/500 so controllers stay in that range.
+* ``newTemperature`` - Color temperature in mireds (100-500)
 
-**Note:** Color temperature is measured in mireds (micro reciprocal degrees, ``mireds = 1000000 / Kelvin``). Lower values (100-200) are cool white; higher values (400-500) are warm white.
+**Note:** Color temperature is measured in mireds (micro reciprocal degrees). Lower values (100-200) are warm white, higher values (400-500) are cool white.
 
 getColorTemperature
 ^^^^^^^^^^^^^^^^^^^
@@ -254,5 +254,5 @@ Example
 Color Temperature Light
 ***********************
 
-.. literalinclude:: ../../../libraries/Matter/examples/Lighting/MatterTemperatureLight/MatterTemperatureLight.ino
+.. literalinclude:: ../../../libraries/Matter/examples/MatterTemperatureLight/MatterTemperatureLight.ino
     :language: arduino

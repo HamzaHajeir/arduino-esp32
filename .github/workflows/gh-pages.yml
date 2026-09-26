@@ -3,7 +3,7 @@ name: GitHub Pages CI
 on:
   push:
     branches:
-      - master
+      # - master
       - pages
     paths:
       - "README.md"
