@@ -1,4 +1,4 @@
-// Copyright 2026 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2024 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,31 +18,9 @@
 
 #include "OThreadCLI_Util.h"
 #include <StreamString.h>
-#include <string.h>
 
-namespace {
-
-// Discard stale CLI output so a prior timed-out command cannot supply Done/Error
-// for the next command.
-static void drainCliRxQueue() {
+bool otGetRespCmd(const char *cmd, char *resp, uint32_t respTimeout) {
   if (!OThreadCLI) {
-    return;
-  }
-  uint32_t idleSince = millis();
-  while (millis() - idleSince < 50) {
-    while (OThreadCLI.available() > 0) {
-      (void)OThreadCLI.read();
-      idleSince = millis();
-    }
-    delay(1);
-  }
-}
-
-}  // namespace
-
-bool otGetRespCmd(const char *cmd, char *resp, size_t respBufSize, uint32_t respTimeout) {
-  if (!OThreadCLI) {
-    log_w("otGetRespCmd: OpenThread CLI not started");
     return false;
   }
   StreamString cliRespAllLines;
@@ -53,67 +31,42 @@ bool otGetRespCmd(const char *cmd, char *resp, size_t respBufSize, uint32_t resp
   if (cmd == NULL) {
     return true;
   }
-  drainCliRxQueue();
   OThreadCLI.println(cmd);
   log_d("CMD[%s]", cmd);
   uint32_t timeout = millis() + respTimeout;
   while (millis() < timeout) {
     size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
     // clip it on EOL
-    for (int i = 0; i < (int)len; i++) {
+    for (int i = 0; i < len; i++) {
       if (cliResp[i] == '\r' || cliResp[i] == '\n') {
         cliResp[i] = '\0';
       }
     }
-    if (len > 0) {
-      log_d("Resp[%s]", cliResp);
-    }
+    log_d("Resp[%s]", cliResp);
     if (strncmp(cliResp, "Done", 4) && strncmp(cliResp, "Error", 4)) {
       cliRespAllLines += cliResp;
       cliRespAllLines.println();  // Adds whatever EOL is for the OS
     } else {
       break;
     }
-    if (len == 0) {
-      delay(1);
-    }
   }
   if (!strncmp(cliResp, "Error", 4) || millis() > timeout) {
-    if (!strncmp(cliResp, "Error", 4)) {
-      log_w("otGetRespCmd: CLI error for '%s': %s", cmd, cliResp);
-    } else {
-      log_w("otGetRespCmd: timed out waiting for '%s'", cmd);
-    }
     return false;
   }
   if (resp != NULL) {
-    size_t n = cliRespAllLines.length();
-    if (respBufSize == 0) {
-      // Legacy raw char* path: caller did not supply a buffer size. Stack-buffer
-      // callers use the template overload, which always passes N > 0.
-      strcpy(resp, cliRespAllLines.c_str());
-    } else {
-      if (n + 1 > respBufSize) {
-        log_w("otGetRespCmd: response truncated (%u bytes into %u-byte buffer)", (unsigned)n, (unsigned)respBufSize);
-        n = respBufSize - 1;
-      }
-      memcpy(resp, cliRespAllLines.c_str(), n);
-      resp[n] = '\0';
-    }
+    strcpy(resp, cliRespAllLines.c_str());
   }
   return true;
 }
 
-bool otExecCommand(const char *cmd, const char *arg, ot_cmd_return_t *returnCode, uint32_t respTimeout) {
+bool otExecCommand(const char *cmd, const char *arg, ot_cmd_return_t *returnCode) {
   if (!OThreadCLI) {
-    log_w("otExecCommand: OpenThread CLI not started");
     return false;
   }
   char cliResp[256] = {0};
   if (cmd == NULL) {
     return true;
   }
-  drainCliRxQueue();
   if (arg == NULL) {
     OThreadCLI.println(cmd);
   } else {
@@ -121,34 +74,14 @@ bool otExecCommand(const char *cmd, const char *arg, ot_cmd_return_t *returnCode
     OThreadCLI.print(" ");
     OThreadCLI.println(arg);
   }
-  uint32_t timeout = millis() + respTimeout;
-  bool gotTerminal = false;
-  while (millis() < timeout) {
-    size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
-    for (int i = 0; i < (int)len; i++) {
-      if (cliResp[i] == '\r' || cliResp[i] == '\n') {
-        cliResp[i] = '\0';
-      }
-    }
-    if (len > 0) {
-      if (arg == NULL) {
-        log_d("CMD[%s] Resp[%s]", cmd, cliResp);
-      } else {
-        log_d("CMD[%s %s] Resp[%s]", cmd, arg, cliResp);
-      }
-    }
-    if (!strncmp(cliResp, "Done", 4) || !strncmp(cliResp, "Error", 4)) {
-      gotTerminal = true;
-      break;
-    }
-    if (len == 0) {
-      delay(1);
+  size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
+  // clip it on EOL
+  for (int i = 0; i < len; i++) {
+    if (cliResp[i] == '\r' || cliResp[i] == '\n') {
+      cliResp[i] = '\0';
     }
   }
-  if (!gotTerminal) {
-    log_w("otExecCommand: timed out waiting for '%s'", cmd);
-    return false;
-  }
+  log_d("CMD[%s %s] Resp[%s]", cmd, arg, cliResp);
   // initial returnCode is success values
   if (returnCode) {
     returnCode->errorCode = 0;
@@ -175,7 +108,7 @@ bool otExecCommand(const char *cmd, const char *arg, ot_cmd_return_t *returnCode
         *i = '\0';
         m = i + 2;  // message is 2 characters after ':'
         while (i > cliResp && *i != ' ') {
-          i--;  // search for ' ' before ':'
+          i--;  // search for ' ' before ":'
         }
         if (*i == ' ') {
           i++;  // move it forward to the number beginning
@@ -184,35 +117,25 @@ bool otExecCommand(const char *cmd, const char *arg, ot_cmd_return_t *returnCode
         }  // otherwise, it will keep the "bad error message" information
       }  // otherwise, it will keep the "bad error message" information
     }  // returnCode is NULL pointer
-    if (arg == NULL) {
-      log_w("otExecCommand: CLI error for '%s': %s", cmd, cliResp);
-    } else {
-      log_w("otExecCommand: CLI error for '%s %s': %s", cmd, arg, cliResp);
-    }
     return false;
   }
 }
 
 bool otPrintRespCLI(const char *cmd, Stream &output, uint32_t respTimeout) {
-  if (!OThreadCLI) {
-    log_w("otPrintRespCLI: OpenThread CLI not started");
-    return false;
-  }
   char cliResp[256] = {0};
   if (cmd == NULL) {
     return true;
   }
-  drainCliRxQueue();
   OThreadCLI.println(cmd);
   uint32_t timeout = millis() + respTimeout;
   while (millis() < timeout) {
     size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
-    if (len == 0) {
-      delay(1);
+    if (cliResp[0] == '\0') {
+      // Straem has timed out and it should try again using parameter respTimeout
       continue;
     }
     // clip it on EOL
-    for (int i = 0; i < (int)len; i++) {
+    for (int i = 0; i < len; i++) {
       if (cliResp[i] == '\r' || cliResp[i] == '\n') {
         cliResp[i] = '\0';
       }
@@ -226,11 +149,6 @@ bool otPrintRespCLI(const char *cmd, Stream &output, uint32_t respTimeout) {
     }
   }
   if (!strncmp(cliResp, "Error", 4) || millis() > timeout) {
-    if (!strncmp(cliResp, "Error", 4)) {
-      log_w("otPrintRespCLI: CLI error for '%s': %s", cmd, cliResp);
-    } else {
-      log_w("otPrintRespCLI: timed out waiting for '%s'", cmd);
-    }
     return false;
   }
   return true;
@@ -238,7 +156,6 @@ bool otPrintRespCLI(const char *cmd, Stream &output, uint32_t respTimeout) {
 
 void otCLIPrintNetworkInformation(Stream &output) {
   if (!OThreadCLI) {
-    log_w("otCLIPrintNetworkInformation: OpenThread CLI not started");
     return;
   }
   char resp[512];

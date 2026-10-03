@@ -2,13 +2,13 @@ name: Documentation Build and Production Deploy CI
 
 on:
   workflow_run:
-    workflows: ["Release ESP32 Arduino package"]
+    workflows: ["ESP32 Arduino Release"]
     types:
       - completed
-  push:
-    branches:
-      - release/v2.x
-      - master
+  # push:
+  #   branches:
+  #     - release/v2.x
+  #     - master
     paths:
       - "docs/**"
       - ".github/workflows/docs_deploy.yml"
