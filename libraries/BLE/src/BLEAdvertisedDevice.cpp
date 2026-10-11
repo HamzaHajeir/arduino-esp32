@@ -1,23 +1,4 @@
 /*
- * Copyright 2017-2026 Espressif Systems (Shanghai) PTE LTD
- * Copyright 2020-2025 Ryan Powell <ryan@nable-embedded.io> and
- * esp-nimble-cpp, NimBLE-Arduino contributors.
- * Copyright 2017 Neil Kolban
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/*
  * BLEAdvertisedDevice.cpp
  *
  * During the scanning procedure, we will be finding advertised BLE devices.  This class
@@ -47,7 +28,6 @@
 #include "BLEAdvertisedDevice.h"
 #include "BLEUtils.h"
 #include "esp32-hal-log.h"
-#include <inttypes.h>
 
 /***************************************************************************
  *                           Common functions                              *
@@ -103,6 +83,7 @@ BLEAdvertisedDevice::BLEAdvertisedDevice(const BLEAdvertisedDevice &other) {
   m_pScan = other.m_pScan;
   m_advType = other.m_advType;
   m_address = other.m_address;
+  m_addressType = other.m_addressType;
 
 #if defined(CONFIG_NIMBLE_ENABLED)
   m_callbackSent = other.m_callbackSent;
@@ -122,7 +103,7 @@ BLEAdvertisedDevice::BLEAdvertisedDevice(const BLEAdvertisedDevice &other) {
     if (m_payload != nullptr) {
       memcpy(m_payload, other.m_payload, m_payloadLength);
     } else {
-      log_e("Failed to allocate %lu bytes for payload in copy constructor", (unsigned long)m_payloadLength);
+      log_e("Failed to allocate %zu bytes for payload in copy constructor", m_payloadLength);
       m_payloadLength = 0;
     }
   } else {
@@ -149,6 +130,7 @@ BLEAdvertisedDevice &BLEAdvertisedDevice::operator=(const BLEAdvertisedDevice &o
   m_pScan = other.m_pScan;
   m_advType = other.m_advType;
   m_address = other.m_address;
+  m_addressType = other.m_addressType;
 
 #if defined(CONFIG_NIMBLE_ENABLED)
   m_callbackSent = other.m_callbackSent;
@@ -172,7 +154,7 @@ BLEAdvertisedDevice &BLEAdvertisedDevice::operator=(const BLEAdvertisedDevice &o
     if (m_payload != nullptr) {
       memcpy(m_payload, other.m_payload, m_payloadLength);
     } else {
-      log_e("Failed to allocate %lu bytes for payload in assignment operator", (unsigned long)m_payloadLength);
+      log_e("Failed to allocate %zu bytes for payload in assignment operator", m_payloadLength);
       m_payloadLength = 0;
     }
   } else {
@@ -430,12 +412,8 @@ bool BLEAdvertisedDevice::haveTXPower() {
 void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len) {
   uint8_t length;
   uint8_t ad_type;
-  size_t sizeConsumed = 0;
+  uint8_t sizeConsumed = 0;
   bool finished = false;
-
-  if (payload == nullptr || total_len == 0) {
-    return;
-  }
 
   // Store/append raw payload data for later retrieval
   // This handles both ADV and Scan Response packets by merging them
@@ -447,7 +425,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
       m_payload = new_payload;
       m_payloadLength += total_len;
     } else {
-      log_e("Failed to reallocate %lu bytes for payload (append)", (unsigned long)m_payloadLength + total_len);
+      log_e("Failed to reallocate %zu bytes for payload (append)", m_payloadLength + total_len);
     }
   } else {
     // First payload - make a copy since the original buffer may be reused
@@ -456,29 +434,13 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
       memcpy(m_payload, payload, total_len);
       m_payloadLength = total_len;
     } else {
-      log_e("Failed to allocate %lu bytes for payload", (unsigned long)total_len);
+      log_e("Failed to allocate %zu bytes for payload", total_len);
       m_payloadLength = 0;
     }
   }
 
   while (!finished) {
-    if (sizeConsumed >= total_len) {
-      break;
-    }
-
-    length = *payload;  // Retrieve the length of the record.
-
-    if (length == 0) {  // Terminator record
-      break;
-    }
-
-    // Reject AD structures that extend past the valid buffer. Otherwise we can
-    // read stale controller/stack memory and produce garbled names/data.
-    if ((size_t)length + 1 > total_len - sizeConsumed) {
-      log_e("AD structure length %u exceeds remaining %lu bytes", length, (unsigned long)(total_len - sizeConsumed));
-      break;
-    }
-
+    length = *payload;           // Retrieve the length of the record.
     payload++;                   // Skip to type
     sizeConsumed += 1 + length;  // increase the size consumed.
 
@@ -488,7 +450,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
       length--;
 
       char *pHex = BLEUtils::buildHexData(nullptr, payload, length);
-      log_d("Type: 0x%.2x (%s), length: %u, data: %s", ad_type, BLEUtils::advDataTypeToString(ad_type), length, pHex);
+      log_d("Type: 0x%.2x (%s), length: %d, data: %s", ad_type, BLEUtils::advDataTypeToString(ad_type), length, pHex);
       free(pHex);
 
       switch (ad_type) {
@@ -519,12 +481,6 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
         case ESP_BLE_AD_TYPE_16SRV_PART:  // 0x02
         case ESP_BLE_AD_TYPE_16SRV_CMPL:  // 0x03
         {                                 // Adv Data Type: ESP_BLE_AD_TYPE_16SRV_PART/CMPL
-          // A UUID list must be a whole number of UUIDs. A partial entry means the
-          // field is malformed, so reject it instead of parsing a truncated list.
-          if (length < 2 || (length % 2) != 0) {
-            log_e("Malformed 16-bit UUID list length: %u", length);
-            break;
-          }
           for (int var = 0; var < length / 2; ++var) {
             setServiceUUID(BLEUUID(*reinterpret_cast<uint16_t *>(payload + var * 2)));
           }
@@ -534,27 +490,23 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
         case ESP_BLE_AD_TYPE_32SRV_PART:  // 0x04
         case ESP_BLE_AD_TYPE_32SRV_CMPL:  // 0x05
         {                                 // Adv Data Type: ESP_BLE_AD_TYPE_32SRV_PART/CMPL
-          if (length < 4 || (length % 4) != 0) {
-            log_e("Malformed 32-bit UUID list length: %u", length);
-            break;
-          }
           for (int var = 0; var < length / 4; ++var) {
             setServiceUUID(BLEUUID(*reinterpret_cast<uint32_t *>(payload + var * 4)));
           }
           break;
         }  // 0x04, 0x05
 
-        case ESP_BLE_AD_TYPE_128SRV_PART:  // 0x06
         case ESP_BLE_AD_TYPE_128SRV_CMPL:  // 0x07
-        {                                  // Adv Data Type: ESP_BLE_AD_TYPE_128SRV_PART/CMPL
-          // Legacy ADV only: one 128-bit UUID fits. Reject any other length.
-          if (length != 16) {
-            log_e("Malformed 128-bit UUID length: %u", length);
-            break;
-          }
+        {                                  // Adv Data Type: ESP_BLE_AD_TYPE_128SRV_CMPL
           setServiceUUID(BLEUUID(payload, 16, false));
           break;
-        }  // 0x06, 0x07
+        }  // 0x07
+
+        case ESP_BLE_AD_TYPE_128SRV_PART:  // 0x06
+        {                                  // Adv Data Type: ESP_BLE_AD_TYPE_128SRV_PART
+          setServiceUUID(BLEUUID(payload, 16, false));
+          break;
+        }  // 0x06
 
         // See CSS Part A 1.4 Manufacturer Specific Data
         case ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE:  // 0xFF
@@ -607,7 +559,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t *payload, size_t total_len)
 
         default:
         {
-          log_d("Unhandled type: adType: %u - 0x%02x", ad_type, ad_type);
+          log_d("Unhandled type: adType: %d - 0x%.2x", ad_type, ad_type);
           break;
         }  // default
       }  // switch
@@ -636,7 +588,7 @@ void BLEAdvertisedDevice::setPayload(uint8_t *payload, size_t total_len, bool ap
     // Append scan response data to existing advertisement data
     uint8_t *new_payload = (uint8_t *)realloc(m_payload, m_payloadLength + total_len);
     if (new_payload == nullptr) {
-      log_e("Failed to reallocate %lu bytes for payload buffer", (unsigned long)m_payloadLength + total_len);
+      log_e("Failed to reallocate %zu bytes for payload buffer", m_payloadLength + total_len);
       return;
     }
     memcpy(new_payload + m_payloadLength, payload, total_len);
@@ -649,7 +601,7 @@ void BLEAdvertisedDevice::setPayload(uint8_t *payload, size_t total_len, bool ap
     }
     m_payload = (uint8_t *)malloc(total_len);
     if (m_payload == nullptr) {
-      log_e("Failed to allocate %lu bytes for payload buffer", (unsigned long)total_len);
+      log_e("Failed to allocate %zu bytes for payload buffer", total_len);
       m_payloadLength = 0;
       return;
     }
@@ -681,7 +633,7 @@ void BLEAdvertisedDevice::setAdFlag(uint8_t adFlag) {
 void BLEAdvertisedDevice::setAppearance(uint16_t appearance) {
   m_appearance = appearance;
   m_haveAppearance = true;
-  log_d("- appearance: %u", m_appearance);
+  log_d("- appearance: %d", m_appearance);
 }  // setAppearance
 
 /**
@@ -776,7 +728,7 @@ String BLEAdvertisedDevice::toString() {
   String res = "Name: " + getName() + ", Address: " + getAddress().toString();
   if (haveAppearance()) {
     char val[6];
-    snprintf(val, sizeof(val), "%u", getAppearance());
+    snprintf(val, sizeof(val), "%d", getAppearance());
     res += ", appearance: ";
     res += val;
   }
@@ -798,8 +750,8 @@ String BLEAdvertisedDevice::toString() {
     res += val;
   }
   if (haveRSSI()) {
-    char val[6];
-    snprintf(val, sizeof(val), "%d", getRSSI());
+    char val[5];
+    snprintf(val, sizeof(val), "%i", getRSSI());
     res += ", rssi: ";
     res += val;
   }
@@ -816,19 +768,19 @@ uint8_t *BLEAdvertisedDevice::getPayload() {
 }
 
 uint8_t BLEAdvertisedDevice::getAddressType() {
-  return m_address.getType();
+  return m_addressType;
 }
 
 ble_frame_type_t BLEAdvertisedDevice::getFrameType() {
   for (int i = 0; i < m_payloadLength; ++i) {
     log_d("check [%d]=0x%02X", i, m_payload[i]);
-    if (m_payload[i] == 0x16 && m_payloadLength >= i + 4 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x00) {
+    if (m_payload[i] == 0x16 && m_payloadLength >= i + 3 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x00) {
       return BLE_EDDYSTONE_UUID_FRAME;
     }
-    if (m_payload[i] == 0x16 && m_payloadLength >= i + 4 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x10) {
+    if (m_payload[i] == 0x16 && m_payloadLength >= i + 3 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x10) {
       return BLE_EDDYSTONE_URL_FRAME;
     }
-    if (m_payload[i] == 0x16 && m_payloadLength >= i + 4 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x20) {
+    if (m_payload[i] == 0x16 && m_payloadLength >= i + 3 && m_payload[i + 1] == 0xAA && m_payload[i + 2] == 0xFE && m_payload[i + 3] == 0x20) {
       return BLE_EDDYSTONE_TLM_FRAME;
     }
   }
@@ -836,7 +788,7 @@ ble_frame_type_t BLEAdvertisedDevice::getFrameType() {
 }
 
 void BLEAdvertisedDevice::setAddressType(uint8_t type) {
-  m_address.setType(type);
+  m_addressType = type;
 }
 
 size_t BLEAdvertisedDevice::getPayloadLength() {

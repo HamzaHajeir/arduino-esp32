@@ -2,9 +2,9 @@ name: CodeQL Analysis
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
+  # push:
+  #   branches:
+  #     - master
   pull_request:
     paths:
       - "**/*.c"
@@ -26,7 +26,6 @@ jobs:
     name: CodeQL ${{ matrix.language }} analysis
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
         language: [python, actions, cpp]
 

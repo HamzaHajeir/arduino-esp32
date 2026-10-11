@@ -11,9 +11,6 @@ ESP-NOW can be used for smart lights, remote control devices, sensors and many o
 
 This library provides an easy-to-use interface for setting up ESP-NOW communication, adding and removing peers, and sending and receiving data packets.
 
-.. note::
-   This library is only tested on the ESP32 family of chips. Interoperability with ESP8266 or other non-ESP32 platforms is not guaranteed.
-
 Arduino-ESP32 ESP-NOW API
 -------------------------
 
