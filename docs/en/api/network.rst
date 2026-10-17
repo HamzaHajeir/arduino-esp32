@@ -713,11 +713,7 @@ The ``STAClass`` (accessed via ``WiFi.STA`` object) extends ``NetworkInterface``
       Serial.println(WiFi.STA.localIP());
     }
 
-.. vale off
-
 For detailed Wi-Fi Station API documentation, see :doc:`wifi`.
-
-.. vale on
 
 Wi-Fi Access Point (AP)
 ***********************
@@ -745,11 +741,7 @@ The ``APClass`` (accessed via ``WiFi.AP`` object) extends ``NetworkInterface`` a
       Serial.println(WiFi.AP.localIP());
     }
 
-.. vale off
-
 For detailed Wi-Fi AP API documentation, see :doc:`wifi`.
-
-.. vale on
 
 Ethernet
 ********
