@@ -16,7 +16,6 @@ SHA256Builder	KEYWORD1
 SHA384Builder	KEYWORD1
 SHA512Builder	KEYWORD1
 SHA3Builder	KEYWORD1
-HMACBuilder	KEYWORD1
 PBKDF2_HMACBuilder	KEYWORD1
 
 #######################################
@@ -34,12 +33,8 @@ toString	KEYWORD2
 hex2bytes	KEYWORD2
 bytes2hex	KEYWORD2
 getHashSize	KEYWORD2
-getBlockSize	KEYWORD2
 setPassword	KEYWORD2
 setSalt	KEYWORD2
-setKey	KEYWORD2
-setHashAlgorithm	KEYWORD2
-setIterations	KEYWORD2
 
 #######################################
 # Constants (LITERAL1)
@@ -54,4 +49,3 @@ SHA3_224_HASH_SIZE	LITERAL1
 SHA3_256_HASH_SIZE	LITERAL1
 SHA3_384_HASH_SIZE	LITERAL1
 SHA3_512_HASH_SIZE	LITERAL1
-HMAC_MAX_BLOCK_SIZE	LITERAL1
