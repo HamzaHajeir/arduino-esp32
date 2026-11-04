@@ -7,7 +7,7 @@
 #include "WiFi.h"
 #include "WiFiGeneric.h"
 #include "WiFiAP.h"
-#if SOC_WIFI_SUPPORTED || CONFIG_ESP_HOSTED_ENABLED
+#if SOC_WIFI_SUPPORTED || CONFIG_ESP_WIFI_REMOTE_ENABLED
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -21,11 +21,6 @@
 #include <lwip/ip_addr.h>
 #include "dhcpserver/dhcpserver_options.h"
 #include "esp_netif.h"
-
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
-#define esp_interface_t wifi_interface_t
-#define ESP_IF_WIFI_AP  WIFI_IF_AP
-#endif
 
 esp_netif_t *get_esp_interface_netif(esp_interface_t interface);
 
@@ -158,9 +153,7 @@ APClass::APClass() : _wifi_ap_event_handle(0) {
 }
 
 APClass::~APClass() {
-  // Calling end() here causes a lot of WiFi code to be linked to the final executable by just including "WiFi.h"
-  // If globals are disabled, then the user should call WiFi.AP.end() before destroying the WiFi object
-  // end();
+  end();
   _ap_network_if = NULL;
 }
 
@@ -181,14 +174,14 @@ bool APClass::onEnable() {
 bool APClass::onDisable() {
   Network.removeEvent(_wifi_ap_event_handle);
   _wifi_ap_event_handle = 0;
-  if (_ap_ev_instance != NULL) {
-    esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, &_ap_event_cb);
-    _ap_ev_instance = NULL;
-  }
   // we just set _esp_netif to NULL here, so destroyNetif() does not try to destroy it.
   // That would be done by WiFi.enableAP(false) if STA is not enabled, or when it gets disabled
   _esp_netif = NULL;
   destroyNetif();
+  if (_ap_ev_instance != NULL) {
+    esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, &_ap_event_cb);
+    _ap_ev_instance = NULL;
+  }
   return true;
 }
 
@@ -325,8 +318,8 @@ bool APClass::enableDhcpCaptivePortal() {
   }
 
   // Create Captive Portal URL: http://192.168.0.4
-  snprintf(captiveportal_uri, sizeof(captiveportal_uri), "http://%s", localIP().toString().c_str());
-  log_i("DHCP Captive Portal URL: %s", captiveportal_uri);
+  strcpy(captiveportal_uri, "http://");
+  strcat(captiveportal_uri, String(localIP()).c_str());
 
   // Stop DHCPS
   err = esp_netif_dhcps_stop(_esp_netif);

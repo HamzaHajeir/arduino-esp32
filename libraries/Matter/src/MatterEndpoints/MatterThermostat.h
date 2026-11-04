@@ -65,11 +65,8 @@ public:
   ThermostatMode_t getMode() {
     return currentMode;
   }
-  // returns a friendly string for the Thermostat SystemMode (unknown if out of range)
+  // returns a friendly string for the Fan Mode
   static const char *getThermostatModeString(uint8_t mode) {
-    if (mode >= (sizeof(thermostatModeString) / sizeof(thermostatModeString[0]))) {
-      return "UNKNOWN";
-    }
     return thermostatModeString[mode];
   }
 
@@ -94,8 +91,10 @@ public:
   float getMaxCoolSetpoint() {
     return (float)kDefaultMaxCoolSetpointLimit / 100.00;
   }
-  // AUTO MinSetpointDeadBand in Celsius (cluster value is 1/10 °C). Falls back to 2.5 °C.
-  float getDeadBand();
+  // get the deadband in 1/10th of a Celsio degree
+  float getDeadBand() {
+    return (float)kDefaultDeadBand / 10.00;
+  }
 
   // generic function for setting the cooling and heating setpoints - checks if the setpoints are valid
   // it can be used to set both setpoints at the same time or only one of them, by setting the other to (float)0xffff
@@ -203,6 +202,6 @@ protected:
   // clang-format on
 
   // string helper for the THERMOSTAT MODE
-  static const char *thermostatModeString[10];
+  static const char *thermostatModeString[5];
 };
 #endif /* CONFIG_ESP_MATTER_ENABLE_DATA_MODEL */

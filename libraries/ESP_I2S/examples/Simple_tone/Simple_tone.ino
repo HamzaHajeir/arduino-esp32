@@ -28,7 +28,6 @@
  10nd February 2025
  */
 
-#include <Arduino.h>
 #include <ESP_I2S.h>
 
 // The GPIO pins are not fixed, most other pins could be used for the I2S function.
@@ -46,7 +45,7 @@ i2s_slot_mode_t slot = I2S_SLOT_MODE_STEREO;
 
 const unsigned int halfWavelength = sampleRate / frequency / 2;  // half wavelength of square wave
 
-int16_t sample = amplitude;  // current sample value
+int32_t sample = amplitude;  // current sample value
 unsigned int count = 0;
 
 I2SClass i2s;
@@ -70,10 +69,13 @@ void loop() {
     sample = -1 * sample;
   }
 
-  int16_t left = sample;
-  int16_t right = sample;
-  i2s.write(&left, sizeof(left));
-  i2s.write(&right, sizeof(right));
+  // Left channel, the low 8 bits then high 8 bits
+  i2s.write(sample);
+  i2s.write(sample >> 8);
+
+  // Right channel, the low 8 bits then high 8 bits
+  i2s.write(sample);
+  i2s.write(sample >> 8);
 
   // increment the counter for the next sample
   count++;
